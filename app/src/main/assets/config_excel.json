@@ -1,0 +1,14 @@
+{
+    "excelFileName": "Formato Transfer.xlsx",
+    "headerRow": 5,
+    "dataStartRow": 6,
+    "columnaId": "B",
+    "columnas": {
+        "fecha":        "A",
+        "noTransfer":   "B",
+        "cliente":      "C",
+        "distribuidor": "D",
+        "ciudad":       "E",
+        "monto":        "F"
+    }
+}
