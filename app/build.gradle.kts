@@ -17,9 +17,19 @@ android {
         versionName = "1.0"
     }
 
+    signingConfigs {
+        create("release") {
+            storeFile = file("../keystore/release.jks")
+            storePassword = "BHniL6zQ"
+            keyAlias = "transferencias"
+            keyPassword = "BHniL6zQ"
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 
