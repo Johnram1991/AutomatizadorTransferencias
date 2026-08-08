@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import com.autotransfer.model.ExcelConfig
 import com.autotransfer.model.Operacion
+import com.autotransfer.util.Meses
 import org.apache.poi.openxml4j.opc.OPCPackage
 import org.apache.poi.openxml4j.opc.PackageAccess
 import org.apache.poi.openxml4j.util.ZipSecureFile
@@ -43,15 +44,13 @@ class ExcelManager {
     fun getConfig(): ExcelConfig = config
 
     private fun getSheetName(fecha: String): String {
-        if (fecha.length < 6) return ""
-        val meses = mapOf(
-            "Jan" to "Enero", "Feb" to "Febrero", "Mar" to "Marzo",
-            "Apr" to "Abril", "May" to "Mayo", "Jun" to "Junio",
-            "Jul" to "Julio", "Aug" to "Agosto", "Sep" to "Septiembre",
-            "Oct" to "Octubre", "Nov" to "Noviembre", "Dec" to "Diciembre"
-        )
-        val abbr = fecha.substring(3, 6)
-        return meses[abbr] ?: ""
+        if (fecha.isBlank()) return ""
+        val partes = fecha.split("-", "/")
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+        if (partes.size < 2) return ""
+        val mesNum = Meses.numero(partes[1])
+        return if (mesNum in 1..12) Meses.nombreEspanol(mesNum) else ""
     }
 
     fun updateExcel(context: Context, excelUri: Uri, operaciones: List<Operacion>): String {
@@ -102,7 +101,11 @@ class ExcelManager {
                 if (encontrado) {
                     actualizados++
                 } else {
-                    val targetSheet = sheet ?: workbook.getSheetAt(0)
+                    val targetSheet = sheet ?: if (sheetName.isNotEmpty()) {
+                        crearHojaSiFalta(workbook, sheetName)
+                    } else {
+                        workbook.getSheetAt(0)
+                    }
                     crearFila(targetSheet, colMap, op)
                     creados++
                 }
@@ -194,6 +197,39 @@ class ExcelManager {
             }
         }
         return baos.toByteArray()
+    }
+
+    private fun crearHojaSiFalta(
+        workbook: org.apache.poi.xssf.usermodel.XSSFWorkbook,
+        sheetName: String
+    ): org.apache.poi.ss.usermodel.Sheet {
+        val existente = workbook.getSheet(sheetName)
+        if (existente != null) return existente
+
+        val hoja = workbook.createSheet(sheetName)
+        val headerRowIdx = config.headerRow - 1
+        val fuente = (0 until workbook.numberOfSheets)
+            .map { workbook.getSheetAt(it) }
+            .filter { it !== hoja && it.getRow(headerRowIdx) != null }
+            .firstOrNull()
+        if (fuente != null) {
+            val filaFuente = fuente.getRow(headerRowIdx)
+            val filaDestino = hoja.createRow(headerRowIdx)
+            for (c in filaFuente.firstCellNum until filaFuente.lastCellNum) {
+                val cell = filaFuente.getCell(c) ?: continue
+                val newCell = filaDestino.createCell(c)
+                when (cell.cellType) {
+                    org.apache.poi.ss.usermodel.CellType.STRING -> newCell.setCellValue(cell.stringCellValue)
+                    org.apache.poi.ss.usermodel.CellType.NUMERIC -> newCell.setCellValue(cell.numericCellValue)
+                    org.apache.poi.ss.usermodel.CellType.BOOLEAN -> newCell.setCellValue(cell.booleanCellValue)
+                    org.apache.poi.ss.usermodel.CellType.FORMULA -> newCell.setCellFormula(cell.cellFormula)
+                    else -> {}
+                }
+                val ancho = fuente.getColumnWidth(c)
+                if (ancho > 0) hoja.setColumnWidth(c, ancho)
+            }
+        }
+        return hoja
     }
 
     private fun buildColumnMap(): Map<String, Int> {

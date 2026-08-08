@@ -1,5 +1,6 @@
 package com.autotransfer.data.firebase
 
+import com.autotransfer.util.Meses
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.tasks.await
 import java.text.Normalizer
@@ -94,6 +95,7 @@ class FirebaseRepository {
 
         val desdeNum = if (desde.isNotBlank()) dateToNum(desde) else 0L
         val hastaNum = if (hasta.isNotBlank()) dateToNum(hasta) else Long.MAX_VALUE
+        val zonasNorm = zonas.map { it.lowercase().trim() }
         return ventas.mapNotNull { v ->
             val d = dateToNum(v.fechaSubidoString)
             val okFecha = d in desdeNum..hastaNum
@@ -101,14 +103,16 @@ class FirebaseRepository {
             val vName = v.clienteNombre.lowercase().trim()
             val vNameCorr = correcciones.entries.fold(vName) { acc, (k, v) -> acc.replace(k, v) }
             val clienteMatch = nombresZona.firstOrNull { matchNombres(vNameCorr, it) }
-            if (clienteMatch == null) return@mapNotNull null
-            val clienteZona = zonaPorNombre[clienteMatch] ?: ""
-            if (v.zonaVenta.isNotBlank() && clienteZona.isNotBlank() && v.zonaVenta != clienteZona) return@mapNotNull null
+            val vZona = v.zonaVenta.lowercase().trim()
+            val coincideZonaVenta = zonas.isNotEmpty() && zonasNorm.any { it == vZona }
+            if (clienteMatch == null && !coincideZonaVenta) return@mapNotNull null
+            val clienteZona = if (clienteMatch != null) zonaPorNombre[clienteMatch] ?: "" else v.zonaVenta
+            if (clienteMatch != null && v.zonaVenta.isNotBlank() && clienteZona.isNotBlank() && v.zonaVenta != clienteZona) return@mapNotNull null
             val dist = listOf("COVEGUSA", "COFARVET", "GRUCOSA")
                 .firstOrNull { v.observa.uppercase().contains(it) } ?: ""
             OperacionData(
                 venta = v,
-                direccion = direccionPorNombre[clienteMatch] ?: "",
+                direccion = if (clienteMatch != null) direccionPorNombre[clienteMatch] ?: "" else "",
                 distribuidor = dist
             )
         }
@@ -139,14 +143,12 @@ class FirebaseRepository {
 
     private fun dateToNum(fecha: String): Long {
         if (fecha.isBlank()) return 0L
-        val meses = mapOf(
-            "Ene" to 1, "Feb" to 2, "Mar" to 3, "Abr" to 4, "May" to 5, "Jun" to 6,
-            "Jul" to 7, "Ago" to 8, "Sep" to 9, "Oct" to 10, "Nov" to 11, "Dic" to 12
-        )
-        val partes = fecha.split("-")
+        val partes = fecha.split("-", "/")
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
         if (partes.size != 3) return 0L
         val dia = partes[0].padStart(2, '0')
-        val mes = meses[partes[1].take(3)]?.toString()?.padStart(2, '0') ?: "00"
+        val mes = Meses.numero(partes[1]).toString().padStart(2, '0')
         val anio = partes[2]
         return (anio + mes + dia).toLongOrNull() ?: 0L
     }

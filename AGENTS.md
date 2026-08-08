@@ -34,6 +34,19 @@ app/src/main/java/com/autotransfer/
 
 ## Cambios realizados
 
+### 0. Ago 2026 — Meses bilingües (inglés/español), hoja auto-creada y clientes nuevos de zona
+- **Problema**: Con datos de agosto, "Procesar desde Firebase" devolvía 0 operaciones (julio funcionaba).
+- **Causa**: App Holland guarda las fechas con mes en inglés (`05-Aug-2026`); los parsers usaban meses en español (`Ago`). `Aug` → mes `00` → la venta quedaba fuera del rango `01-Ago..31-Ago`. Julio funcionó porque `Jul` es idéntico en ambos idiomas.
+- **Nuevo `util/Meses.kt`**: mapa único mes→número que reconoce `Ago`/`Aug`, `Ene`/`Jan`, `Abr`/`Apr`, `Dic`/`Dec`, etc., y devuelve nombre de mes en español.
+- **Aplicado en**:
+  - `FirebaseRepository.dateToNum()` — repara el filtro de fechas (0 operaciones).
+  - `MainViewModel.parseFecha()` — filtros Desde/Hasta en pantalla y ordenamiento.
+  - `ExcelManager.getSheetName()` — resuelve la hoja del mes con ambos idiomas y formatos `dd-MMM-yyyy`, `dd/MM/yyyy` e ISO.
+- **Excel**: si la hoja del mes (p. ej. "Agosto") no existe, `ExcelManager` la crea automáticamente copiando la fila de encabezados y anchos desde una hoja existente (`crearHojaSiFalta`).
+- **Clientes nuevos de la zona**: App Holland y `getVentasParaExcel` ahora incluyen ventas cuyo cliente no está aún en la colección `clientes` si la venta trae la zona solicitada (`zonaVenta`).
+- **Diagnóstico**: `procesarFirebaseDiagnostic` muestra también `fechaSubidoString` de cada venta.
+- **Icono**: se agregaron al repo los PNG de `ic_launcher_foreground` y `mipmap-*dpi/ic_launcher.png` (antes solo existían en el build local, no en git). El keystore sigue en `keystore/release.jks` (ignorado, no se sube).
+
 ### 1. ExtractorPDF.kt — Patrón de continuación sin nombre
 - **Problema**: 7 filas no obtenían el sufijo del noTransfer
 - **Causa**: La línea de continuación `"3 18:08:14 18:18:14"` (solo sufijo + timestamps, sin nombre) no matcheaba ningún patrón

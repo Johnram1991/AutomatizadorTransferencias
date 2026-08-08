@@ -20,6 +20,7 @@ import com.autotransfer.model.Rule
 import com.autotransfer.pdf.ExtractorPDF
 import com.autotransfer.pdf.PDFReader
 import com.autotransfer.ui.components.todosMunicipios
+import com.autotransfer.util.Meses
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import kotlinx.coroutines.Dispatchers
@@ -329,12 +330,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _isFirebaseLoading.value = false
                 _firebaseVentas.value = withContext(Dispatchers.Default) {
                     val nombresZona = clientes.map { it.nombre.lowercase().trim() }
+                    val zonasNorm = zonas.map { it.lowercase().trim() }
                     val fbCorrecciones = mapOf("macotel" to "macotela")
                     ventas.filter { v ->
                         if (zonas.isEmpty()) return@filter true
                         val vName = v.clienteNombre.lowercase().trim()
                         val vNameCorr = fbCorrecciones.entries.fold(vName) { acc, (k, v) -> acc.replace(k, v) }
-                        nombresZona.any { FirebaseRepository.matchNombres(vNameCorr, it) }
+                        if (nombresZona.any { FirebaseRepository.matchNombres(vNameCorr, it) }) return@filter true
+                        val vZona = v.zonaVenta.lowercase().trim()
+                        zonasNorm.any { vZona == it }
                     }.sortedByDescending { ventaSortKey(it) }
                 }
 
@@ -443,26 +447,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _fechaDesde.value = desde
         _fechaHasta.value = hasta
         viewModelScope.launch(Dispatchers.Default) {
-            val desdeNum = if (desde.isNotBlank()) parseFechaLocal(desde) else 0L
-            val hastaNum = if (hasta.isNotBlank()) parseFechaLocal(hasta) else Long.MAX_VALUE
+            val desdeNum = if (desde.isNotBlank()) parseFecha(desde) else 0L
+            val hastaNum = if (hasta.isNotBlank()) parseFecha(hasta) else Long.MAX_VALUE
             val filtradas = _firebaseVentas.value.filter { v ->
-                val d = parseFechaLocal(v.fechaSubidoString)
+                val d = parseFecha(v.fechaSubidoString)
                 d in desdeNum..hastaNum
             }
             _ventasFiltradas.value = filtradas
         }
     }
 
-    private fun parseFechaLocal(fecha: String): Long {
+    private fun parseFecha(fecha: String): Long {
         if (fecha.isBlank()) return 0L
-        val meses = mapOf(
-            "Ene" to 1, "Feb" to 2, "Mar" to 3, "Abr" to 4, "May" to 5, "Jun" to 6,
-            "Jul" to 7, "Ago" to 8, "Sep" to 9, "Oct" to 10, "Nov" to 11, "Dic" to 12
-        )
-        val partes = fecha.split("-")
+        val partes = fecha.split("-", "/")
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
         if (partes.size != 3) return 0L
         val dia = partes[0].padStart(2, '0')
-        val mes = meses[partes[1].take(3)]?.toString()?.padStart(2, '0') ?: "00"
+        val mes = Meses.numero(partes[1]).toString().padStart(2, '0')
         val anio = partes[2]
         return (anio + mes + dia).toLongOrNull() ?: 0L
     }
@@ -482,20 +484,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val fecha = parseFecha(venta.fechaSubidoString)
         val folio = extraerFolio(venta.id)
         return fecha * 100000 + folio
-    }
-
-    private fun parseFecha(fecha: String): Long {
-        if (fecha.isBlank()) return 0L
-        val meses = mapOf(
-            "Ene" to 1, "Feb" to 2, "Mar" to 3, "Abr" to 4, "May" to 5, "Jun" to 6,
-            "Jul" to 7, "Ago" to 8, "Sep" to 9, "Oct" to 10, "Nov" to 11, "Dic" to 12
-        )
-        val partes = fecha.split("-")
-        if (partes.size != 3) return 0L
-        val dia = partes[0].padStart(2, '0')
-        val mes = meses[partes[1].take(3)]?.toString()?.padStart(2, '0') ?: "00"
-        val anio = partes[2]
-        return (anio + mes + dia).toLongOrNull() ?: 0L
     }
 
     fun confirmarCiudad(cliente: String, ciudad: String) {
@@ -666,7 +654,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             else -> "extraer"
                         }
                         val diff = if (repoOk && extractedOk && repoCity != extracted) " [repo='$repoCity' != extraer='$extracted']" else ""
-                        d.appendLine("${r.venta.id} | [$src]$diff dir='${r.direccion.take(80)}' → '$ciudad'")
+                        d.appendLine("${r.venta.id} | ${r.venta.fechaSubidoString} | [$src]${if (diff.isNotEmpty()) " ${diff}" else ""} dir='${r.direccion.take(80)}' → '$ciudad'")
                         val needsReview = !repoOk || (repoOk && extractedOk && repoCity != extracted)
                         if (needsReview) {
                             pends.add(CityEntity(cliente = r.venta.clienteNombre.trim(), ciudad = ciudad))
