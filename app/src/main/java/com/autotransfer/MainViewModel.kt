@@ -63,6 +63,12 @@ data class CityReviewItem(
     val direccion: String = ""
 )
 
+data class ResumenCliente(
+    val cliente: String,
+    val numVentas: Int,
+    val total: Double
+)
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
@@ -108,6 +114,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isAscending = MutableStateFlow(true)
     val isAscending: StateFlow<Boolean> = _isAscending.asStateFlow()
+
+    private val _resumenClientes = MutableStateFlow<List<ResumenCliente>>(emptyList())
+    val resumenClientes: StateFlow<List<ResumenCliente>> = _resumenClientes.asStateFlow()
+
+    private val _resumenAsc = MutableStateFlow(false)
+    val resumenAsc: StateFlow<Boolean> = _resumenAsc.asStateFlow()
+
+    private val _resumenClienteFiltro = MutableStateFlow("")
 
     private val _pendingOperaciones = MutableStateFlow<List<Operacion>>(emptyList())
     val pendingOperaciones: StateFlow<List<Operacion>> = _pendingOperaciones.asStateFlow()
@@ -454,7 +468,36 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 d in desdeNum..hastaNum
             }
             _ventasFiltradas.value = filtradas
+            recalcularResumen()
         }
+    }
+
+    fun toggleResumenOrder() {
+        _resumenAsc.value = !_resumenAsc.value
+        viewModelScope.launch(Dispatchers.Default) { recalcularResumen() }
+    }
+
+    fun setResumenClienteFiltro(nombre: String) {
+        _resumenClienteFiltro.value = nombre
+        viewModelScope.launch(Dispatchers.Default) { recalcularResumen() }
+    }
+
+    fun limpiarResumenClienteFiltro() {
+        _resumenClienteFiltro.value = ""
+        viewModelScope.launch(Dispatchers.Default) { recalcularResumen() }
+    }
+
+    private fun recalcularResumen() {
+        val filtro = _resumenClienteFiltro.value.lowercase().trim()
+        val base = _ventasFiltradas.value.filter {
+            filtro.isEmpty() || it.clienteNombre.lowercase().trim().contains(filtro)
+        }
+        val agrupado = base.groupBy { it.clienteNombre.trim().ifEmpty { "Sin nombre" } }
+            .map { (cliente, lista) -> ResumenCliente(cliente, lista.size, lista.sumOf { it.total }) }
+        _resumenClientes.value = if (_resumenAsc.value)
+            agrupado.sortedBy { it.total }
+        else
+            agrupado.sortedByDescending { it.total }
     }
 
     private fun parseFecha(fecha: String): Long {

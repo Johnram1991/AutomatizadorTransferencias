@@ -733,6 +733,7 @@ private fun MainScreen(
 private fun HollandScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     val firebaseClientes by viewModel.firebaseClientes.collectAsState()
     val firebaseVentas by viewModel.firebaseVentas.collectAsState()
+    val resumenClientes by viewModel.resumenClientes.collectAsState()
     val isLoading by viewModel.isFirebaseLoading.collectAsState()
     val loginState by viewModel.firebaseLoginState.collectAsState()
 
@@ -797,9 +798,39 @@ private fun HollandScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     contentColor = MaterialTheme.colorScheme.primary
                 ) else ButtonDefaults.outlinedButtonColors()
             ) { Text("Ventas (${firebaseVentas.size})") }
+            OutlinedButton(
+                onClick = { tab = "resumen" },
+                modifier = Modifier.weight(1f),
+                colors = if (tab == "resumen") ButtonDefaults.outlinedButtonColors(
+                    contentColor = MaterialTheme.colorScheme.primary
+                ) else ButtonDefaults.outlinedButtonColors()
+            ) { Text("Resumen (${resumenClientes.size})") }
         }
 
-        if (tab == "clientes") {
+        if (tab != "clientes") {
+            HollandDateFilter(
+                fechaDesde = fechaDesdeLocal,
+                fechaHasta = fechaHastaLocal,
+                onDesde = { f ->
+                    fechaDesdeLocal = f
+                    viewModel.setFechas(f, fechaHastaLocal)
+                    viewModel.saveFechaDesde(f)
+                },
+                onHasta = { f ->
+                    fechaHastaLocal = f
+                    viewModel.setFechas(fechaDesdeLocal, f)
+                    viewModel.saveFechaHasta(f)
+                },
+                onClear = {
+                    fechaDesdeLocal = ""; fechaHastaLocal = ""
+                    viewModel.setFechas("", "")
+                    viewModel.saveFechaDesde(""); viewModel.saveFechaHasta("")
+                }
+            )
+        }
+
+        when (tab) {
+            "clientes" -> {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -870,85 +901,10 @@ private fun HollandScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     }
                 }
             }
-        } else {
+        }
+            "ventas" -> {
             val totalGeneral = ventasFiltradas.sumOf { it.total }
             val fmt = java.text.NumberFormat.getCurrencyInstance(java.util.Locale("es", "MX"))
-
-            var showDesdePicker by remember { mutableStateOf(false) }
-            var showHastaPicker by remember { mutableStateOf(false) }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                OutlinedButton(
-                    onClick = { showDesdePicker = true },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(if (fechaDesdeLocal.isBlank()) "📅 Desde" else fechaDesdeLocal,
-                        fontSize = 11.sp)
-                }
-                OutlinedButton(
-                    onClick = { showHastaPicker = true },
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text(if (fechaHastaLocal.isBlank()) "📅 Hasta" else fechaHastaLocal,
-                        fontSize = 11.sp)
-                }
-                OutlinedButton(
-                    onClick = {
-                        fechaDesdeLocal = ""; fechaHastaLocal = ""
-                        viewModel.setFechas("", "")
-                        viewModel.saveFechaDesde(""); viewModel.saveFechaHasta("")
-                    },
-                    modifier = Modifier.height(40.dp)
-                ) { Text("⟲", fontSize = 12.sp) }
-            }
-
-            if (showDesdePicker) {
-                val state = androidx.compose.material3.rememberDatePickerState()
-                androidx.compose.material3.DatePickerDialog(
-                    onDismissRequest = { showDesdePicker = false },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            state.selectedDateMillis?.let { millis ->
-                                fechaDesdeLocal = millisToDateStr(millis)
-                                viewModel.setFechas(fechaDesdeLocal, fechaHastaLocal)
-                                viewModel.saveFechaDesde(fechaDesdeLocal)
-                            }
-                            showDesdePicker = false
-                        }) { Text("Aceptar") }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showDesdePicker = false }) { Text("Cancelar") }
-                    }
-                ) {
-                    androidx.compose.material3.DatePicker(state = state)
-                }
-            }
-
-            if (showHastaPicker) {
-                val state = androidx.compose.material3.rememberDatePickerState()
-                androidx.compose.material3.DatePickerDialog(
-                    onDismissRequest = { showHastaPicker = false },
-                    confirmButton = {
-                        TextButton(onClick = {
-                            state.selectedDateMillis?.let { millis ->
-                                fechaHastaLocal = millisToDateStr(millis)
-                                viewModel.setFechas(fechaDesdeLocal, fechaHastaLocal)
-                                viewModel.saveFechaHasta(fechaHastaLocal)
-                            }
-                            showHastaPicker = false
-                        }) { Text("Aceptar") }
-                    },
-                    dismissButton = {
-                        TextButton(onClick = { showHastaPicker = false }) { Text("Cancelar") }
-                    }
-                ) {
-                    androidx.compose.material3.DatePicker(state = state)
-                }
-            }
 
             if (ventasFiltradas.isNotEmpty()) {
                 Card(
@@ -996,40 +952,259 @@ private fun HollandScreen(viewModel: MainViewModel, onBack: () -> Unit) {
 
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     items(ventasFiltradas, key = { it.id }) { v ->
+                        VentaItemCard(v, direccionPorNombre)
+                    }
+                }
+            }
+        }
+            "resumen" -> {
+                val resumen by viewModel.resumenClientes.collectAsState()
+                val resumenAsc by viewModel.resumenAsc.collectAsState()
+                val fmt = java.text.NumberFormat.getCurrencyInstance(java.util.Locale("es", "MX"))
+                var clienteFiltro by remember { mutableStateOf("") }
+                var selectedCliente by remember { mutableStateOf<String?>(null) }
+                val direccionPorNombre = remember(firebaseClientes) {
+                    firebaseClientes.associate { it.nombre.lowercase().trim() to it.direccion }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = clienteFiltro,
+                        onValueChange = {
+                            clienteFiltro = it
+                            viewModel.setResumenClienteFiltro(it)
+                        },
+                        label = { Text("Filtrar cliente") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        value = zonaFilter,
+                        onValueChange = {
+                            zonaFilter = it
+                            viewModel.saveZonaFilter(parseZonas(it))
+                            viewModel.loadFirebaseData(parseZonas(it))
+                        },
+                        label = { Text("Zona") },
+                        modifier = Modifier.width(100.dp),
+                        singleLine = true,
+                        placeholder = { Text("25") }
+                    )
+                    OutlinedButton(
+                        onClick = {
+                            clienteFiltro = ""
+                            viewModel.limpiarResumenClienteFiltro()
+                        },
+                        modifier = Modifier.height(48.dp)
+                    ) { Text("⟲", fontSize = 12.sp) }
+                }
+
+                if (selectedCliente != null) {
+                    Button(
+                        onClick = {
+                            selectedCliente = null
+                            viewModel.limpiarResumenClienteFiltro()
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    ) { Text("← Volver al resumen") }
+                    val ventasCliente = ventasFiltradas.filter {
+                        it.clienteNombre.trim().ifEmpty { "Sin nombre" } == selectedCliente
+                    }
+                    val totalCliente = ventasCliente.sumOf { it.total }
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primaryContainer
+                        )
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp)) {
+                            Text(selectedCliente ?: "", fontWeight = FontWeight.Bold)
+                            Text("Total comprado: ${fmt.format(totalCliente)}",
+                                fontWeight = FontWeight.SemiBold)
+                            Text("${ventasCliente.size} ventas en el rango",
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    if (isLoading) {
+                        CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                    } else if (ventasCliente.isEmpty()) {
+                        Text("No hay ventas de este cliente en el rango.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            items(ventasCliente, key = { it.id }) { v ->
+                                VentaItemCard(v, direccionPorNombre)
+                            }
+                        }
+                    }
+                } else {
+                    if (resumen.isNotEmpty()) {
                         Card(
                             modifier = Modifier.fillMaxWidth(),
                             colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                containerColor = MaterialTheme.colorScheme.primaryContainer
                             )
                         ) {
                             Column(modifier = Modifier.padding(12.dp)) {
-                                if (v.clienteNombre.isNotBlank()) Text(v.clienteNombre,
-                                    fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-                                Row {
-                                    if (v.id.isNotBlank()) Text("${v.id}  ",
-                                        fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
-                                    if (v.fechaSubidoString.isNotBlank()) Text(v.fechaSubidoString,
-                                        style = MaterialTheme.typography.bodySmall)
-                                }
-                                if (v.zonaVenta.isNotBlank()) {
-                                    val dir = direccionPorNombre[v.clienteNombre.lowercase().trim()] ?: ""
-                                    Text(if (dir.isNotBlank()) "Zona: ${v.zonaVenta}  Dir: $dir" else "Zona: ${v.zonaVenta}",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.primary)
-                                }
-                                if (v.observa.isNotBlank()) Text(v.observa,
+                                Text("Total general: ${fmt.format(resumen.sumOf { it.total })}",
+                                    fontWeight = FontWeight.Bold)
+                                Text("${resumen.size} clientes en el rango",
                                     style = MaterialTheme.typography.bodySmall)
-                                if (v.productos.isNotEmpty()) {
-                                    HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                                    com.autotransfer.ui.components.ProductTable(
-                                        productos = v.productos,
-                                        totalVenta = v.total
-                                    )
+                            }
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        if (resumen.isNotEmpty()) {
+                            OutlinedButton(onClick = { viewModel.toggleResumenOrder() }) {
+                                Text(if (resumenAsc) "↑ Menor total" else "↓ Mayor total")
+                            }
+                        }
+                    }
+
+                    if (isLoading) {
+                        CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
+                    } else if (resumen.isEmpty()) {
+                        Text("No hay ventas en este rango para la zona seleccionada.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            items(resumen, key = { it.cliente }) { r ->
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.surfaceVariant
+                                    ),
+                                    onClick = { selectedCliente = r.cliente }
+                                ) {
+                                    Column(modifier = Modifier.padding(12.dp)) {
+                                        Text(r.cliente, fontWeight = FontWeight.Bold)
+                                        Text("${r.numVentas} ventas",
+                                            style = MaterialTheme.typography.bodySmall)
+                                        Text(fmt.format(r.total),
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = MaterialTheme.colorScheme.primary)
+                                    }
                                 }
                             }
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun HollandDateFilter(
+    fechaDesde: String,
+    fechaHasta: String,
+    onDesde: (String) -> Unit,
+    onHasta: (String) -> Unit,
+    onClear: () -> Unit
+) {
+    var showDesdePicker by remember { mutableStateOf(false) }
+    var showHastaPicker by remember { mutableStateOf(false) }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        OutlinedButton(
+            onClick = { showDesdePicker = true },
+            modifier = Modifier.weight(1f)
+        ) {
+            Text(if (fechaDesde.isBlank()) "📅 Desde" else fechaDesde, fontSize = 11.sp)
+        }
+        OutlinedButton(
+            onClick = { showHastaPicker = true },
+            modifier = Modifier.weight(1f)
+        ) {
+            Text(if (fechaHasta.isBlank()) "📅 Hasta" else fechaHasta, fontSize = 11.sp)
+        }
+        OutlinedButton(onClick = onClear, modifier = Modifier.height(40.dp)) {
+            Text("⟲", fontSize = 12.sp)
+        }
+    }
+
+    if (showDesdePicker) {
+        val state = androidx.compose.material3.rememberDatePickerState()
+        androidx.compose.material3.DatePickerDialog(
+            onDismissRequest = { showDesdePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    state.selectedDateMillis?.let { millis -> onDesde(millisToDateStr(millis)) }
+                    showDesdePicker = false
+                }) { Text("Aceptar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDesdePicker = false }) { Text("Cancelar") }
+            }
+        ) {
+            androidx.compose.material3.DatePicker(state = state)
+        }
+    }
+
+    if (showHastaPicker) {
+        val state = androidx.compose.material3.rememberDatePickerState()
+        androidx.compose.material3.DatePickerDialog(
+            onDismissRequest = { showHastaPicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    state.selectedDateMillis?.let { millis -> onHasta(millisToDateStr(millis)) }
+                    showHastaPicker = false
+                }) { Text("Aceptar") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showHastaPicker = false }) { Text("Cancelar") }
+            }
+        ) {
+            androidx.compose.material3.DatePicker(state = state)
+        }
+    }
+}
+
+@Composable
+private fun VentaItemCard(v: FirebaseVenta, direccionPorNombre: Map<String, String>) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
+        )
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            if (v.clienteNombre.isNotBlank()) Text(v.clienteNombre,
+                fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
+            Row {
+                if (v.id.isNotBlank()) Text("${v.id}  ",
+                    fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
+                if (v.fechaSubidoString.isNotBlank()) Text(v.fechaSubidoString,
+                    style = MaterialTheme.typography.bodySmall)
+            }
+            if (v.zonaVenta.isNotBlank()) {
+                val dir = direccionPorNombre[v.clienteNombre.lowercase().trim()] ?: ""
+                Text(if (dir.isNotBlank()) "Zona: ${v.zonaVenta}  Dir: $dir" else "Zona: ${v.zonaVenta}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary)
+            }
+            if (v.observa.isNotBlank()) Text(v.observa,
+                style = MaterialTheme.typography.bodySmall)
+            if (v.productos.isNotEmpty()) {
+                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                com.autotransfer.ui.components.ProductTable(
+                    productos = v.productos,
+                    totalVenta = v.total
+                )
             }
         }
     }

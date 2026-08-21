@@ -73,6 +73,13 @@ app/src/main/java/com/autotransfer/
   3. `POIXMLDocument.openPackage(String)` → `XSSFWorkbook(OPCPackage)` — modo más permisivo
 - Antes de abrir, verifica los primeros 4 bytes con magic `504b0304` para confirmar que es ZIP válido
 
+### 6. App Holland — Tab "Resumen de ventas"
+- Nuevo tercer tab "Resumen" en `HollandScreen` (junto a Clientes y Ventas) para ver ventas generales por cliente en un rango de fechas.
+- **MainViewModel**: nueva `data class ResumenCliente(cliente, numVentas, total)`, estados `resumenClientes`/`resumenAsc`/`resumenClienteFiltro`, función `recalcularResumen()` que agrupa `_ventasFiltradas` por cliente (conteo + suma de total) y ordena por total según `_resumenAsc` (default descendente → mayor comprador primero). Públicos: `toggleResumenOrder()`, `setResumenClienteFiltro()`, `limpiarResumenClienteFiltro()`.
+- **MainActivity**: toggle de 3 tabs; filtro de fechas compartido extraído a `HollandDateFilter` (Ventas y Resumen); tarjeta de venta extraída a `VentaItemCard` (evita duplicación).
+- **Tab Resumen**: filtro por cliente (opcional), campo zona (default "25", al cambiar recarga vía `loadFirebaseData`), rango de fechas; card con total general y nº de clientes; botón `↓ Mayor total` / `↑ Menor total`; al tocar un cliente muestra el detalle de todas sus ventas del rango con botón `← Volver al resumen`.
+- Todo es local en memoria (agrupa `_ventasFiltradas` ya cargadas); el único acceso a Firebase es una lectura al cambiar la zona (mismo patrón que el tab Clientes). No hay escrituras ni notificaciones a Firebase.
+
 ## Comandos útiles
 
 ```bash
