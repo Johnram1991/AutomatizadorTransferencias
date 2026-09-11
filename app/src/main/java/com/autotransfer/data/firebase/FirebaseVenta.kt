@@ -13,13 +13,27 @@ data class FirebaseVenta(
 ) {
     companion object {
         fun fromMap(id: String, map: Map<String, Any?>): FirebaseVenta {
+            val zonaRaw = map["zonaClave"] ?: map["zona"]
+            val zonaStr = when (zonaRaw) {
+                is Map<*, *> -> {
+                    val clave = zonaRaw["clave"]
+                    when (clave) {
+                        is String -> clave
+                        is Number -> clave.toString()
+                        else -> ""
+                    }
+                }
+                is String -> zonaRaw
+                is Number -> zonaRaw.toString()
+                else -> ""
+            }
             return FirebaseVenta(
                 id = id,
                 clienteNombre = map["clienteNombre"]?.toString() ?: "",
                 ventaT = map["VentaT"]?.toString() ?: "",
                 observa = map["observaciones"]?.toString() ?: "",
                 promos = map["promociones"]?.toString() ?: "",
-                zonaVenta = map["zona"]?.toString() ?: "",
+                zonaVenta = zonaStr,
                 fechaSubidoString = map["fecha"]?.toString() ?: "",
                 total = (map["total"] as? Number)?.toDouble() ?: 0.0,
                 productos = (map["productos"] as? List<Map<String, Any?>>) ?: emptyList()

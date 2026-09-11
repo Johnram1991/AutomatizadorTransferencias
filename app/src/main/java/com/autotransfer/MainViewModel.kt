@@ -343,16 +343,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _firebaseClientes.value = clientes
                 _isFirebaseLoading.value = false
                 _firebaseVentas.value = withContext(Dispatchers.Default) {
-                    val nombresZona = clientes.map { it.nombre.lowercase().trim() }
-                    val zonasNorm = zonas.map { it.lowercase().trim() }
-                    val fbCorrecciones = mapOf("macotel" to "macotela")
+                    val zonasNorm = zonas.map { FirebaseRepository.normalizarZona(it) }.filter { it.isNotEmpty() }
+                    val nombresZona = clientes
+                        .filter { c -> zonasNorm.isEmpty() || zonasNorm.any { z -> FirebaseRepository.normalizarZona(c.zona) == z } }
+                        .map { it.nombre.lowercase().trim() }
                     ventas.filter { v ->
-                        if (zonas.isEmpty()) return@filter true
-                        val vName = v.clienteNombre.lowercase().trim()
-                        val vNameCorr = fbCorrecciones.entries.fold(vName) { acc, (k, v) -> acc.replace(k, v) }
-                        if (nombresZona.any { FirebaseRepository.matchNombres(vNameCorr, it) }) return@filter true
-                        val vZona = v.zonaVenta.lowercase().trim()
-                        zonasNorm.any { vZona == it }
+                        if (zonasNorm.isEmpty()) return@filter true
+                        val vZona = FirebaseRepository.normalizarZona(v.zonaVenta)
+                        val ventaTieneZona = v.zonaVenta.isNotBlank() && vZona.isNotEmpty()
+                        if (ventaTieneZona) return@filter vZona in zonasNorm
+                        nombresZona.any { FirebaseRepository.matchNombres(FirebaseRepository.normalizarNombre(v.clienteNombre), it) }
                     }.sortedByDescending { ventaSortKey(it) }
                 }
 
@@ -386,14 +386,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         .sortedByDescending { ventaSortKey(it) }
                 }
                 val ventasFiltradas = if (zonas.isNotEmpty()) {
+                    val zonasNorm = zonas.map { FirebaseRepository.normalizarZona(it) }.filter { it.isNotEmpty() }
                     val nombresZona = _firebaseClientes.value
-                        .filter { c -> zonas.any { z -> c.zona == z } }
+                        .filter { c -> zonasNorm.any { z -> FirebaseRepository.normalizarZona(c.zona) == z } }
                         .map { it.nombre.lowercase().trim() }
-                    val fbCorrecciones = mapOf("macotel" to "macotela")
                     ventas.filter { v ->
-                        val vName = v.clienteNombre.lowercase().trim()
-                        val vNameCorr = fbCorrecciones.entries.fold(vName) { acc, (k, v) -> acc.replace(k, v) }
-                        nombresZona.any { FirebaseRepository.matchNombres(vNameCorr, it) }
+                        val vZona = FirebaseRepository.normalizarZona(v.zonaVenta)
+                        val ventaTieneZona = v.zonaVenta.isNotBlank() && vZona.isNotEmpty()
+                        if (ventaTieneZona) return@filter vZona in zonasNorm
+                        nombresZona.any { FirebaseRepository.matchNombres(FirebaseRepository.normalizarNombre(v.clienteNombre), it) }
                     }
                 } else ventas
                 _firebaseVentas.value = ventasFiltradas
@@ -614,12 +615,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     for ((_, r) in resultados.withIndex()) {
                         val key = r.venta.clienteNombre.lowercase().trim()
                         val repoCity = todasGuardadas[key]
-                        val repoOk = repoCity != null && esCiudadValida(repoCity)
+                        val repoOk = repoCity != null && repoCity.trim().isNotEmpty()
                         val extracted = extraerCiudad(r.direccion)
                         val extractedOk = esCiudadValida(extracted)
                         val ciudad = when {
-                            repoOk && (!extractedOk || repoCity == extracted) -> repoCity!!
-                            else -> extracted
+                            repoOk -> repoCity!!
+                            extractedOk -> extracted
+                            else -> ""
                         }
                         ops.add(Operacion(
                             noTransfer = r.venta.id,
@@ -629,8 +631,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             ciudad = ciudad,
                             distribuidor = r.distribuidor
                         ))
-                        val needsReview = !repoOk || (repoOk && extractedOk && repoCity != extracted)
-                        if (needsReview) {
+                        if (!repoOk && !extractedOk) {
                             pends.add(CityEntity(cliente = r.venta.clienteNombre.trim(), ciudad = ciudad))
                         }
                     }
@@ -682,24 +683,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val (pendientes, diag) = withContext(Dispatchers.Default) {
                     val pends = mutableListOf<CityEntity>()
                     val d = StringBuilder()
+                    val zonasSolicitadas = zonas.map { it to FirebaseRepository.normalizarZona(it) }
+                    val zonasVentas = resultados.map { it.venta.zonaVenta to FirebaseRepository.normalizarZona(it.venta.zonaVenta) }
+                        .distinctBy { it.second }
+                    d.appendLine("=== ZONAS ===")
+                    d.appendLine("Solicitadas: ${zonasSolicitadas.joinToString { "${it.first}->'${it.second}'" }}")
+                    d.appendLine("Zonas en ventas incluidas: ${zonasVentas.joinToString { "${it.first}->'${it.second}'" }}")
+                    d.appendLine("Total operaciones: ${resultados.size}")
+                    d.appendLine()
                     for (r in resultados) {
                         val key = r.venta.clienteNombre.lowercase().trim()
                         val repoCity = todasGuardadas[key]
-                        val repoOk = repoCity != null && esCiudadValida(repoCity)
+                        val repoOk = repoCity != null && repoCity.trim().isNotEmpty()
                         val extracted = extraerCiudad(r.direccion)
                         val extractedOk = esCiudadValida(extracted)
                         val ciudad = when {
-                            repoOk && (!extractedOk || repoCity == extracted) -> repoCity!!
-                            else -> extracted
+                            repoOk -> repoCity!!
+                            extractedOk -> extracted
+                            else -> ""
                         }
                         val src = when {
-                            repoOk && (!extractedOk || repoCity == extracted) -> "repo"
-                            else -> "extraer"
+                            repoOk -> "repo"
+                            extractedOk -> "extraer"
+                            else -> "?"
                         }
                         val diff = if (repoOk && extractedOk && repoCity != extracted) " [repo='$repoCity' != extraer='$extracted']" else ""
                         d.appendLine("${r.venta.id} | ${r.venta.fechaSubidoString} | [$src]${if (diff.isNotEmpty()) " ${diff}" else ""} dir='${r.direccion.take(80)}' → '$ciudad'")
-                        val needsReview = !repoOk || (repoOk && extractedOk && repoCity != extracted)
-                        if (needsReview) {
+                        if (!repoOk && !extractedOk) {
                             pends.add(CityEntity(cliente = r.venta.clienteNombre.trim(), ciudad = ciudad))
                         }
                     }
@@ -759,6 +769,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _uiState.value = result
             } catch (e: Exception) {
                 _uiState.value = UiState.Error("Error grabando Excel: ${e.message}")
+            }
+        }
+    }
+
+    fun grabarDatosExcelEn(destinoUri: android.net.Uri) {
+        if (auth.currentUser == null) {
+            _uiState.value = UiState.Error("No hay sesión de Firebase")
+            return
+        }
+        val excelUri = _excelUri.value
+        if (excelUri == null) {
+            _uiState.value = UiState.Error("Selecciona el archivo Formato Transfer.xlsx primero")
+            return
+        }
+        val ops = _pendingOperaciones.value
+        if (ops.isEmpty()) {
+            _uiState.value = UiState.Error("No hay datos pendientes para grabar. Procesa desde Firebase primero.")
+            return
+        }
+        _uiState.value = UiState.Processing("Guardando copia nueva del Excel...")
+        viewModelScope.launch {
+            try {
+                val ctx = getApplication<Application>()
+                val resultMsg = withContext(Dispatchers.IO) {
+                    excelManager.guardarCopiaNueva(ctx, excelUri, destinoUri, ops)
+                }
+                _pendingOperaciones.value = emptyList()
+                val result = UiState.Result(
+                    message = resultMsg,
+                    processedCount = ops.size,
+                    errorCount = 0,
+                    operaciones = ops
+                )
+                _lastResult.value = result
+                _uiState.value = result
+            } catch (e: Exception) {
+                _uiState.value = UiState.Error("Error guardando copia Excel: ${e.message}")
             }
         }
     }
@@ -1243,7 +1290,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val operacionesConCiudades = operaciones.map { op ->
                         if (op.ciudad.isEmpty()) {
                             val cachedCity = cityRepository.get(op.cliente)
-                            if (cachedCity != null && esCiudadValida(cachedCity)) {
+                            if (cachedCity != null && cachedCity.trim().isNotEmpty()) {
                                 op.copy(ciudad = cachedCity)
                             } else op
                         } else op

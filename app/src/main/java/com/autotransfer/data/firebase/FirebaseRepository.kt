@@ -43,7 +43,7 @@ class FirebaseRepository {
             val data = doc.data
             if (doc.exists() && data != null) {
                 val c = FirebaseCliente.fromMap(doc.id, data)
-                val matchZona = zonas.isEmpty() || zonas.any { c.zona == it }
+                val matchZona = zonas.isEmpty() || zonas.any { normalizarZona(c.zona) == normalizarZona(it) }
                 val matchQuery = q.isEmpty() ||
                     c.nombre.lowercase().contains(q) ||
                     c.empresa.lowercase().contains(q) ||
@@ -74,17 +74,18 @@ class FirebaseRepository {
         desde: String,
         hasta: String
     ): List<OperacionData> {
+        val zonasNorm = zonas.map { normalizarZona(it) }.filter { it.isNotEmpty() }
         val clientesZona = db.collection("clientes").get().await().documents.mapNotNull { doc ->
             val data = doc.data
             if (doc.exists() && data != null) {
                 val c = FirebaseCliente.fromMap(doc.id, data)
-                if (zonas.isEmpty() || zonas.any { c.zona == it }) c else null
+                if (zonasNorm.isEmpty() || zonasNorm.any { normalizarZona(c.zona) == it }) c else null
             } else null
         }
-        val nombresZona = clientesZona.map { it.nombre.lowercase().trim() }
-        val direccionPorNombre = clientesZona.associate { it.nombre.lowercase().trim() to it.direccion }
-        val zonaPorNombre = clientesZona.associate { it.nombre.lowercase().trim() to it.zona }
-        val correcciones = mapOf("macotel" to "macotela")
+        val nombresZona = clientesZona.filter { normalizarZona(it.zona).isNotEmpty() }
+            .map { it.nombre.lowercase().trim() }
+        val direccionPorNombre = clientesZona.filter { normalizarZona(it.zona).isNotEmpty() }
+            .associate { it.nombre.lowercase().trim() to it.direccion }
 
         val ventas = db.collection("ventas")
             .whereEqualTo("VentaT", "T")
@@ -95,19 +96,18 @@ class FirebaseRepository {
 
         val desdeNum = if (desde.isNotBlank()) dateToNum(desde) else 0L
         val hastaNum = if (hasta.isNotBlank()) dateToNum(hasta) else Long.MAX_VALUE
-        val zonasNorm = zonas.map { it.lowercase().trim() }
+        val coincidirConZona = zonasNorm.isNotEmpty()
         return ventas.mapNotNull { v ->
             val d = dateToNum(v.fechaSubidoString)
             val okFecha = d in desdeNum..hastaNum
             if (!okFecha) return@mapNotNull null
-            val vName = v.clienteNombre.lowercase().trim()
-            val vNameCorr = correcciones.entries.fold(vName) { acc, (k, v) -> acc.replace(k, v) }
-            val clienteMatch = nombresZona.firstOrNull { matchNombres(vNameCorr, it) }
-            val vZona = v.zonaVenta.lowercase().trim()
-            val coincideZonaVenta = zonas.isNotEmpty() && zonasNorm.any { it == vZona }
-            if (clienteMatch == null && !coincideZonaVenta) return@mapNotNull null
-            val clienteZona = if (clienteMatch != null) zonaPorNombre[clienteMatch] ?: "" else v.zonaVenta
-            if (clienteMatch != null && v.zonaVenta.isNotBlank() && clienteZona.isNotBlank() && v.zonaVenta != clienteZona) return@mapNotNull null
+            val vZona = normalizarZona(v.zonaVenta)
+            val ventaTieneZona = v.zonaVenta.isNotBlank() && vZona.isNotEmpty()
+            val coincidenciaCliente = zonasNorm.isNotEmpty() && !ventaTieneZona && nombresZona.any { matchNombres(normalizarNombre(v.clienteNombre), it) }
+            val protegidaPorVenta = ventaTieneZona && vZona in zonasNorm
+            val incluida = !coincidirConZona || protegidaPorVenta || coincidenciaCliente
+            if (!incluida) return@mapNotNull null
+            val clienteMatch = nombresZona.firstOrNull { matchNombres(normalizarNombre(v.clienteNombre), it) }
             val dist = listOf("COVEGUSA", "COFARVET", "GRUCOSA")
                 .firstOrNull { v.observa.uppercase().contains(it) } ?: ""
             OperacionData(
@@ -119,6 +119,20 @@ class FirebaseRepository {
     }
 
     companion object {
+        fun normalizarZona(z: String): String {
+            return z.lowercase()
+                .replace(" ", "")
+                .replace("-", "")
+                .removePrefix("z")
+        }
+
+        fun normalizarNombre(nombre: String): String {
+            return nombre.lowercase()
+                .replace(Regex("[^\\p{L}\\p{N} ]"), "")
+                .replace(Regex("\\s+"), " ")
+                .trim()
+        }
+
         fun matchNombres(a: String, b: String): Boolean {
             if (a == b) return true
             if (a.length >= 5 && b.length >= 5 && (a.contains(b) || b.contains(a))) return true

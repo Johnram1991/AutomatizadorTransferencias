@@ -13,9 +13,6 @@ import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.StringWriter
-import java.util.zip.ZipEntry
-import java.util.zip.ZipInputStream
-import java.util.zip.ZipOutputStream
 
 class ExcelManager {
 
@@ -54,20 +51,79 @@ class ExcelManager {
     }
 
     fun updateExcel(context: Context, excelUri: Uri, operaciones: List<Operacion>): String {
-        val tempFile = File(context.cacheDir, "excel_temp.xlsx")
-
         try {
             ZipSecureFile.setMinInflateRatio(0.0)
             ZipSecureFile.setMaxEntrySize(Long.MAX_VALUE)
 
-            val bytes = context.contentResolver.openInputStream(excelUri)?.use { it.readBytes() }
-                ?: return "Error: no se pudo leer el Excel"
-            if (bytes.size < 100) return "Error: archivo Excel vacío o inválido (${bytes.size} bytes)"
-            tempFile.writeBytes(bytes)
+            val bytesOriginales = leerExcelBytes(context, excelUri)
+                ?: return "Error: no se pudo leer el Excel o el archivo no es un .xlsx válido"
 
-            val magic = bytes.take(4).joinToString("") { "%02x".format(it) }
-            if (!magic.equals("504b0304", ignoreCase = true))
-                return "Error: archivo no es ZIP válido (magic=$magic)"
+            val construido = construirExcel(context, bytesOriginales, operaciones)
+                ?: return "Error: no se pudo generar un Excel válido"
+            val finalBytes = construido.first
+            val resumen = construido.second
+
+            if (!escribirYVerificar(context, excelUri, finalBytes)) {
+                val restaurado = escribirYVerificar(context, excelUri, bytesOriginales)
+                return if (restaurado) {
+                    "Error: no se pudo guardar correctamente; se restauró el archivo original.\n$resumen"
+                } else {
+                    "Error: no se pudo guardar ni restaurar el Excel."
+                }
+            }
+            return resumen
+        } catch (e: Exception) {
+            val sw = StringWriter()
+            e.printStackTrace(java.io.PrintWriter(sw))
+            return "Error al modificar Excel: ${e.message}\n${sw.toString().take(1000)}"
+        }
+    }
+
+    fun guardarCopiaNueva(
+        context: Context,
+        fuenteUri: Uri,
+        destinoUri: Uri,
+        operaciones: List<Operacion>
+    ): String {
+        try {
+            ZipSecureFile.setMinInflateRatio(0.0)
+            ZipSecureFile.setMaxEntrySize(Long.MAX_VALUE)
+
+            val bytesOrigen = leerExcelBytes(context, fuenteUri)
+                ?: return "Error: no se pudo leer el Excel de origen"
+
+            val construido = construirExcel(context, bytesOrigen, operaciones)
+                ?: return "Error: no se pudo generar un Excel válido"
+            val finalBytes = construido.first
+            val resumen = construido.second
+
+            if (!escribirYVerificar(context, destinoUri, finalBytes)) {
+                return "Error: el archivo nuevo quedó dañado al guardar; elimínalo y vuelve a intentarlo.\n$resumen"
+            }
+            return "Copia nueva guardada correctamente.\n$resumen"
+        } catch (e: Exception) {
+            val sw = StringWriter()
+            e.printStackTrace(java.io.PrintWriter(sw))
+            return "Error al guardar copia: ${e.message}\n${sw.toString().take(1000)}"
+        }
+    }
+
+    private fun leerExcelBytes(context: Context, excelUri: Uri): ByteArray? {
+        val bytes = context.contentResolver.openInputStream(excelUri)?.use { it.readBytes() } ?: return null
+        if (bytes.size < 100) return null
+        val magic = bytes.take(4).joinToString("") { "%02x".format(it) }
+        if (!magic.equals("504b0304", ignoreCase = true)) return null
+        return bytes
+    }
+
+    private fun construirExcel(
+        context: Context,
+        bytesOrigen: ByteArray,
+        operaciones: List<Operacion>
+    ): Pair<ByteArray, String>? {
+        val tempFile = File(context.cacheDir, "excel_temp.xlsx")
+        try {
+            tempFile.writeBytes(bytesOrigen)
 
             val workbook = try {
                 XSSFWorkbook(tempFile.inputStream())
@@ -82,6 +138,10 @@ class ExcelManager {
 
             val colMap = buildColumnMap()
 
+            for (name in operaciones.map { getSheetName(it.fecha) }.filter { it.isNotEmpty() }.distinct()) {
+                prepararHojaDelMes(workbook, name)
+            }
+
             var actualizados = 0
             var creados = 0
 
@@ -92,7 +152,7 @@ class ExcelManager {
                 if (!encontrado) {
                     for (i in 0 until workbook.numberOfSheets) {
                         val s = workbook.getSheetAt(i)
-                        if (s != sheet && buscarFila(s, colMap, op)) {
+                        if (s != sheet && !esHojaMachote(s) && buscarFila(s, colMap, op)) {
                             encontrado = true
                             break
                         }
@@ -114,17 +174,25 @@ class ExcelManager {
             val baos = ByteArrayOutputStream()
             workbook.write(baos)
             workbook.close()
-            val reordered = fixZipOrder(baos.toByteArray())
 
-            context.contentResolver.openOutputStream(excelUri, "w")?.use { it.write(reordered) }
-
-            return "Actualizados: $actualizados | Creados: $creados | Total: ${operaciones.size}"
-        } catch (e: Exception) {
-            val sw = StringWriter()
-            e.printStackTrace(java.io.PrintWriter(sw))
-            return "Error al modificar Excel: ${e.message}\n${sw.toString().take(1000)}"
+            val finalBytes = escribirBytesVerificado(baos.toByteArray()) ?: return null
+            return Pair(finalBytes, "Actualizados: $actualizados | Creados: $creados | Total: ${operaciones.size}")
         } finally {
             try { tempFile.delete() } catch (_: Exception) {}
+        }
+    }
+
+    private fun escribirYVerificar(context: Context, uri: Uri, bytes: ByteArray): Boolean {
+        return try {
+            val out = context.contentResolver.openOutputStream(uri, "w") ?: return false
+            try {
+                out.write(bytes)
+            } finally {
+                out.close()
+            }
+            verificarEscritura(context, uri)
+        } catch (_: Exception) {
+            false
         }
     }
 
@@ -162,41 +230,37 @@ class ExcelManager {
         return result
     }
 
-    private fun fixZipOrder(bytes: ByteArray): ByteArray {
-        val entries = mutableListOf<Pair<String, ByteArray>>()
-        val contentTypesEntry = mutableListOf<Pair<String, ByteArray>>()
+    private fun escribirBytesVerificado(poiBytes: ByteArray): ByteArray? {
+        return if (esExcelValido(poiBytes)) poiBytes else null
+    }
 
-        ZipInputStream(bytes.inputStream()).use { zis ->
-            var entry = zis.nextEntry
-            while (entry != null) {
-                val data = zis.readBytes()
-                val name = entry.name
-                if (name.equals("[Content_Types].xml", ignoreCase = true)) {
-                    contentTypesEntry.add(Pair(name, data))
-                } else {
-                    entries.add(Pair(name, data))
-                }
-                zis.closeEntry()
-                entry = zis.nextEntry
-            }
+    private fun verificarEscritura(context: Context, excelUri: Uri): Boolean {
+        return try {
+            val bytes = context.contentResolver.openInputStream(excelUri)?.use { it.readBytes() } ?: return false
+            esExcelValido(bytes)
+        } catch (_: Exception) {
+            false
         }
+    }
 
-        val baos = ByteArrayOutputStream()
-        ZipOutputStream(baos).use { zos ->
-            for ((name, data) in contentTypesEntry + entries) {
-                val entry = if (name.startsWith("/")) ZipEntry(name.substring(1)) else ZipEntry(name)
-                entry.method = ZipEntry.STORED
-                entry.size = data.size.toLong()
-                entry.compressedSize = data.size.toLong()
-                val crc = java.util.zip.CRC32()
-                crc.update(data)
-                entry.crc = crc.value
-                zos.putNextEntry(entry)
-                zos.write(data)
-                zos.closeEntry()
-            }
+    private fun prepararHojaDelMes(
+        workbook: org.apache.poi.xssf.usermodel.XSSFWorkbook,
+        sheetName: String
+    ) {
+        val existente = workbook.getSheet(sheetName) ?: return
+        val startRow = config.dataStartRow - 1
+        val tieneDatos = (startRow..existente.lastRowNum).any { rowIdx ->
+            val row = existente.getRow(rowIdx) ?: return@any false
+            val cellId = row.getCell(excelColumnToIndex(config.columnaId))
+            cellId != null && cellId.toString().trim().isNotEmpty()
         }
-        return baos.toByteArray()
+        if (tieneDatos) return
+        val idx = workbook.getSheetIndex(existente)
+        workbook.removeSheetAt(idx)
+    }
+
+    private fun esHojaMachote(sheet: org.apache.poi.ss.usermodel.Sheet): Boolean {
+        return sheet.sheetName.contains("machote", ignoreCase = true)
     }
 
     private fun crearHojaSiFalta(
@@ -205,6 +269,15 @@ class ExcelManager {
     ): org.apache.poi.ss.usermodel.Sheet {
         val existente = workbook.getSheet(sheetName)
         if (existente != null) return existente
+
+        val machoteIdx = (0 until workbook.numberOfSheets)
+            .firstOrNull { esHojaMachote(workbook.getSheetAt(it)) }
+
+        if (machoteIdx != null) {
+            val hoja = workbook.createSheet(workbookNameUnico(workbook, sheetName))
+            copiarDesdeMachote(workbook.getSheetAt(machoteIdx), hoja)
+            return hoja
+        }
 
         val hoja = workbook.createSheet(sheetName)
         val headerRowIdx = config.headerRow - 1
@@ -218,18 +291,70 @@ class ExcelManager {
             for (c in filaFuente.firstCellNum until filaFuente.lastCellNum) {
                 val cell = filaFuente.getCell(c) ?: continue
                 val newCell = filaDestino.createCell(c)
-                when (cell.cellType) {
-                    org.apache.poi.ss.usermodel.CellType.STRING -> newCell.setCellValue(cell.stringCellValue)
-                    org.apache.poi.ss.usermodel.CellType.NUMERIC -> newCell.setCellValue(cell.numericCellValue)
-                    org.apache.poi.ss.usermodel.CellType.BOOLEAN -> newCell.setCellValue(cell.booleanCellValue)
-                    org.apache.poi.ss.usermodel.CellType.FORMULA -> newCell.setCellFormula(cell.cellFormula)
-                    else -> {}
-                }
+                copiarCelda(cell, newCell)
                 val ancho = fuente.getColumnWidth(c)
                 if (ancho > 0) hoja.setColumnWidth(c, ancho)
             }
         }
         return hoja
+    }
+
+    private fun copiarDesdeMachote(
+        fuente: org.apache.poi.ss.usermodel.Sheet,
+        destino: org.apache.poi.ss.usermodel.Sheet
+    ) {
+        for (col in 0 until 128) {
+            val ancho = fuente.getColumnWidth(col)
+            if (ancho > 0) destino.setColumnWidth(col, ancho)
+        }
+        for (r in fuente.firstRowNum..fuente.lastRowNum) {
+            val filaFuente = fuente.getRow(r) ?: continue
+            val filaDestino = destino.createRow(r)
+            filaDestino.height = filaFuente.height
+            for (c in filaFuente.firstCellNum until filaFuente.lastCellNum) {
+                val cell = filaFuente.getCell(c) ?: continue
+                copiarCelda(cell, filaDestino.createCell(c))
+            }
+        }
+        for (merge in fuente.mergedRegions) {
+            destino.addMergedRegion(merge)
+        }
+    }
+
+    private fun copiarCelda(
+        fuente: org.apache.poi.ss.usermodel.Cell,
+        destino: org.apache.poi.ss.usermodel.Cell
+    ) {
+        when (fuente.cellType) {
+            org.apache.poi.ss.usermodel.CellType.STRING -> destino.setCellValue(fuente.stringCellValue)
+            org.apache.poi.ss.usermodel.CellType.NUMERIC -> destino.setCellValue(fuente.numericCellValue)
+            org.apache.poi.ss.usermodel.CellType.BOOLEAN -> destino.setCellValue(fuente.booleanCellValue)
+            org.apache.poi.ss.usermodel.CellType.FORMULA -> destino.setCellFormula(fuente.cellFormula)
+            else -> {}
+        }
+        destino.cellStyle = fuente.cellStyle
+    }
+
+    private fun esExcelValido(bytes: ByteArray): Boolean {
+        return try {
+            java.io.ByteArrayInputStream(bytes).use { XSSFWorkbook(it).close() }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun workbookNameUnico(
+        workbook: org.apache.poi.xssf.usermodel.XSSFWorkbook,
+        deseado: String
+    ): String {
+        var nombre = deseado
+        var sufijo = 1
+        while (workbook.getSheet(nombre) != null) {
+            nombre = "$deseado ($sufijo)"
+            sufijo++
+        }
+        return nombre
     }
 
     private fun buildColumnMap(): Map<String, Int> {
@@ -286,18 +411,17 @@ class ExcelManager {
     ) {
         val idColIdx = excelColumnToIndex(config.columnaId)
         val startRow = config.dataStartRow - 1
-        val endRow = sheet.lastRowNum.coerceAtLeast(startRow)
 
-        var targetRowIdx = startRow
-        for (rowIdx in startRow..endRow) {
-            val row = sheet.getRow(rowIdx)
-            if (row == null) { targetRowIdx = rowIdx; break }
+        var targetRowIdx = sheet.lastRowNum.coerceAtLeast(startRow) + 1
+        if (sheet.lastRowNum < startRow) targetRowIdx = startRow
+        for (rowIdx in startRow..sheet.lastRowNum) {
+            val row = sheet.getRow(rowIdx) ?: continue
             val cellId = row.getCell(idColIdx)
             if (cellId == null || cellId.toString().trim().isEmpty()) {
-                targetRowIdx = rowIdx; break
+                targetRowIdx = rowIdx
+                break
             }
         }
-        if (targetRowIdx > endRow) targetRowIdx = endRow + 1
 
         val row = sheet.getRow(targetRowIdx) ?: sheet.createRow(targetRowIdx)
         escribirCelda(row, colMap["noTransfer"]) { it.setCellValue(op.noTransfer) }

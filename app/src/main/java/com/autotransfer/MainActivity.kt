@@ -333,6 +333,10 @@ private fun MainScreen(
     val excelUriState by viewModel.excelUri.collectAsState()
     val excelFileNameState by viewModel.excelFileName.collectAsState()
     val pendingOps by viewModel.pendingOperaciones.collectAsState()
+    val copiaSugerida = remember(excelFileNameState) {
+        val base = excelFileNameState?.removeSuffix(".xlsx") ?: "Formato Transfer"
+        "${base}_PROCESADO.xlsx"
+    }
 
     val folderPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -374,6 +378,14 @@ private fun MainScreen(
             }
             viewModel.setExcelUri(it, fileName)
             folderError = null
+        }
+    }
+
+    val crearCopiaLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    ) { uri ->
+        uri?.let {
+            viewModel.grabarDatosExcelEn(it)
         }
     }
 
@@ -688,6 +700,13 @@ private fun MainScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("💾 Grabar datos Excel")
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { crearCopiaLauncher.launch(copiaSugerida) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("📄 Guardar copia nueva (formato actual)")
                     }
                 }
 

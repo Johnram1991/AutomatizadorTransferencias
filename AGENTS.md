@@ -80,6 +80,21 @@ app/src/main/java/com/autotransfer/
 - **Tab Resumen**: filtro por cliente (opcional), campo zona (default "25", al cambiar recarga vía `loadFirebaseData`), rango de fechas; card con total general y nº de clientes; botón `↓ Mayor total` / `↑ Menor total`; al tocar un cliente muestra el detalle de todas sus ventas del rango con botón `← Volver al resumen`.
 - Todo es local en memoria (agrupa `_ventasFiltradas` ya cargadas); el único acceso a Firebase es una lectura al cambiar la zona (mismo patrón que el tab Clientes). No hay escrituras ni notificaciones a Firebase.
 
+### 7. Sep 2026 — Filtro estricto de zona, lectura robusta de zona y escritura Excel verificada
+- **Problemas**: 1) Al procesar desde Firebase con zona Z25 entraban transfers de otras zonas (p. ej. Z11A); 2) los archivos Excel se corrompían al escribir directo sobre OneDrive (prompt "Encontramos un problema con parte del contenido…", a veces ni se podían borrar/renombrar).
+- **Zona — normalización (`FirebaseRepository` companion)**:
+  - `normalizarZona(z)`: lowercase, quita espacios y guiones, `removePrefix("z")` — "Z 25"→"25", "Z11A"→"11a".
+  - `normalizarNombre(nombre)`: lowercase, quita no-alfanuméricos, colapsa espacios.
+  - `FirebaseVenta.fromMap` ahora lee la zona de forma robusta (`zonaClave ?: zona`, acepta `String`, `Number` y `Map{clave}` como la de `FirebaseCliente`). Antes si la zona venía en `zonaClave`/como mapa quedaba vacía y la regla de exclusión no actuaba.
+  - Regla estricta en `getVentasParaExcel` y filtros de `MainViewModel`: si la venta trae zona llena → solo se incluye si su zona normalizada está en la selección; si la venta no trae zona → solo se incluye por coincidencia de nombre contra clientes de las zonas elegidas. Se eliminó la corrección hardcodeada `"macotel"→"macotela"` y el cruce `v.zonaVenta != clienteZona` que filtraba mal.
+- **Excel — escritura con verificación y restauración (`ExcelManager`)**:
+  - `updateExcel`: lee los bytes originales (`leerExcelBytes`, valida tamaño y magic ZIP `504b0304`), construye el nuevo workbook en memoria (`construirExcel`) y lo escribe con `escribirYVerificar` (write + relectura post-write). Si la escritura falla o el archivo queda inválido, **re-escribe los bytes originales** para restaurarlo y lo reporta.
+  - `guardarCopiaNueva(context, fuenteUri, destinoUri, ops)`: nueva función para escribir la copia en un destino distinto (no toca el original) con la misma verificación.
+  - **Eliminado `fixZipOrder`**: ya no se descomprime/recomprime el .xlsx (era una fuente de daño cuando el write a OneDrive no era atómico).
+  - `prepararHojaDelMes` ahora elimina la hoja del mes solo si está **vacía** (sin filas de datos), y `crearHojaSiFalta` la regenera copiando desde la hoja machote real (`esHojaMachote`: nombre contiene "machote") con `copiarDesdeMachote` (anchos, alturas, estilos y merges). Si la hoja ya tiene datos, NO se reemplaza.
+- **UI (`MainActivity`/`MainViewModel`)**: nuevo botón "📄 Guardar copia nueva (formato actual)" que abre el selector de guardado (`ACTION_CREATE_DOCUMENT`, nombre sugerido `<excel>_PROCESADO.xlsx`) y llama `grabarDatosExcelEn(uri)`. El botón "💾 Grabar datos Excel" sigue escribiendo al original pero con restauración automática si falla.
+- **Diagnóstico**: `procesarFirebaseDiagnostic` imprime bloque `=== ZONAS ===` con las zonas solicitadas y las zonas reales de las ventas incluidas (crudo→normalizado) para depurar el cruce.
+
 ## Comandos útiles
 
 ```bash
@@ -110,7 +125,7 @@ app/src/main/java/com/autotransfer/
 
 ---
 
-## Estado actual del proyecto (28 Jul 2026)
+## Estado actual del proyecto (Sep 2026)
 
 ### Objetivo
 App Android que procesa PDFs de transferencias bancarias y actualiza Excel. Soporta SAF (Google Drive) y **ruta directa** para servicios sin DocumentsProvider como OneDrive. Tiene integración con Firebase Firestore (App Holland) para filtrar por zona y procesar ventas directamente.
@@ -120,16 +135,20 @@ App Android que procesa PDFs de transferencias bancarias y actualiza Excel. Sopo
 - SAF vía `ACTION_OPEN_DOCUMENT_TREE` para seleccionar carpeta (Drive, almacenamiento local)
 - App Holland: login Firebase, clientes por zona, ventas filtradas, city_review
 - Procesamiento de PDFs (Concentrado/Transfer) con extracción por regex
-- Escritura en Excel con Apache POI (3 estrategias de apertura) — escribe directo en OneDrive
+- Escritura en Excel con Apache POI (3 estrategias de apertura + verificación post-write y restauración del original) — escribe directo en OneDrive
+- Filtro estricto de zona (normalización `Z 25`/`25`/`Z11A`→`11a`) al procesar desde Firebase
+- Botón "Guardar copia nueva (formato actual)" → escribe un archivo `.xlsx` nuevo sin tocar el original
 - City repository (Room SQLite) + revisión manual de ciudades no reconocidas
 
 ### Problemas conocidos
 1. OneDrive sin suscripción no sincroniza archivos localmente → los archivos se ven en Samsung My Files pero no tienen una ruta física accesible via `java.io.File`
-2. Google Drive SAF funciona si el Excel está en la raíz y hay carpetas Transfer/Concentrado
-3. Si SAF no encuentra el Excel, probar `runExcelDiagnostic` para ver exactamente qué detecta
+2. El write directo a OneDrive no es atómico → puede corromper el Excel; ante dudas usar "Guardar copia nueva" en lugar de sobrescribir
+3. Google Drive SAF funciona si el Excel está en la raíz y hay carpetas Transfer/Concentrado
+4. Si SAF no encuentra el Excel, probar `runExcelDiagnostic` para ver exactamente qué detecta
 
 ### Próximo paso
 - Probar `Intent.createChooser` para que aparezcan Samsung My Files, Google Drive, etc. al seleccionar carpeta
 
 ### APK último build
 - `app/build/outputs/apk/debug/app-debug.apk`
+- `app/build/outputs/apk/release/app-release.apk` (firmado), copia en `/storage/emulated/0/Download/Download/app-release.apk`
