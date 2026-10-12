@@ -11,6 +11,7 @@ import com.autotransfer.data.CityRepository
 import com.autotransfer.data.firebase.FirebaseCliente
 import com.autotransfer.data.firebase.FirebaseRepository
 import com.autotransfer.data.firebase.FirebaseVenta
+import com.autotransfer.data.firebase.HollandCache
 import com.autotransfer.excel.ExcelManager
 import com.autotransfer.file.FileNavigator
 import com.autotransfer.file.FileOrganizer
@@ -20,10 +21,13 @@ import com.autotransfer.model.Rule
 import com.autotransfer.pdf.ExtractorPDF
 import com.autotransfer.pdf.PDFReader
 import com.autotransfer.ui.components.todosMunicipios
+import com.autotransfer.util.Fechas
+import com.autotransfer.util.Fuzzy
 import com.autotransfer.util.Meses
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -69,6 +73,12 @@ data class ResumenCliente(
     val total: Double
 )
 
+data class TopProducto(
+    val nombre: String,
+    val total: Double,
+    val piezas: Int
+)
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
@@ -81,6 +91,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val excelUri: StateFlow<Uri?> = _excelUri.asStateFlow()
 
     private val _excelFileName = MutableStateFlow<String?>(null)
+
+    /**
+     * true cuando el archivo se eligio con "Mis Archivos" (ACTION_GET_CONTENT):
+     * ese permiso no persiste y muere cuando se cierra la app, por eso la URI
+     * tampoco se guarda en prefs.
+     */
+    private val _excelAccesoTemporal = MutableStateFlow(false)
+    val excelAccesoTemporal: StateFlow<Boolean> = _excelAccesoTemporal.asStateFlow()
     val excelFileName: StateFlow<String?> = _excelFileName.asStateFlow()
 
     private val _lastResult = MutableStateFlow<UiState.Result?>(null)
@@ -104,9 +122,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _clienteSearchResult = MutableStateFlow<Pair<List<FirebaseCliente>, List<FirebaseVenta>>?>(null)
     val clienteSearchResult: StateFlow<Pair<List<FirebaseCliente>, List<FirebaseVenta>>?> = _clienteSearchResult.asStateFlow()
 
-    private val _fechaDesde = MutableStateFlow("")
+    // El rango global arranca siempre en "primer dia del mes -> hoy" (decidido):
+    // si arranca vacio la pantalla abre sin fechas y no se ve nada.
+    private val _fechaDesde = MutableStateFlow(Fechas.primerDiaDelMes())
     val fechaDesde: StateFlow<String> = _fechaDesde.asStateFlow()
-    private val _fechaHasta = MutableStateFlow("")
+    private val _fechaHasta = MutableStateFlow(Fechas.hoy())
     val fechaHasta: StateFlow<String> = _fechaHasta.asStateFlow()
 
     private val _ventasFiltradas = MutableStateFlow<List<FirebaseVenta>>(emptyList())
@@ -122,6 +142,60 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val resumenAsc: StateFlow<Boolean> = _resumenAsc.asStateFlow()
 
     private val _resumenClienteFiltro = MutableStateFlow("")
+
+    // Clientes: _firebaseClientesZona es la lista de la zona (sin busqueda) y
+    // _firebaseClientes es esa lista ya filtrada por la busqueda difusa y ordenada.
+    private val _firebaseClientesZona = MutableStateFlow<List<FirebaseCliente>>(emptyList())
+    val firebaseClientesZona: StateFlow<List<FirebaseCliente>> = _firebaseClientesZona.asStateFlow()
+
+    private val _clientesQuery = MutableStateFlow("")
+    val clientesQuery: StateFlow<String> = _clientesQuery.asStateFlow()
+
+    /** Segunda caja de busqueda: filtra por ciudad (campo [FirebaseCliente.direccion]). */
+    private val _clientesCiudadQuery = MutableStateFlow("")
+    val clientesCiudadQuery: StateFlow<String> = _clientesCiudadQuery.asStateFlow()
+
+    /** Clave de zona cuyos datos ya estan en memoria: evita releer el JSON. */
+    private var zonaEnMemoria = ""
+
+    /** "Hoy 14:32" / "Nunca se ha descargado": lo que muestra el boton Actualizar Datos. */
+    private val _ultimaSync = MutableStateFlow("Nunca se ha descargado")
+    val ultimaSync: StateFlow<String> = _ultimaSync.asStateFlow()
+
+    private val _syncMensaje = MutableStateFlow<String?>(null)
+    val syncMensaje: StateFlow<String?> = _syncMensaje.asStateFlow()
+
+    /** Error de carga de Holland, para no dejar la pantalla vacia sin explicar. */
+    private val _syncError = MutableStateFlow<String?>(null)
+    val syncError: StateFlow<String?> = _syncError.asStateFlow()
+
+    private val _clientesAsc = MutableStateFlow(true)
+    val isClientesAscending: StateFlow<Boolean> = _clientesAsc.asStateFlow()
+
+    private val _clientesCargados = MutableStateFlow(false)
+    val clientesCargados: StateFlow<Boolean> = _clientesCargados.asStateFlow()
+
+    private val _ventasCargadas = MutableStateFlow(false)
+    val ventasCargadas: StateFlow<Boolean> = _ventasCargadas.asStateFlow()
+
+    // Detalle de un cliente: lista propia y rango de fechas propio, para no
+    // pisar las ventas globales que usan Ventas / Resumen / Graficos.
+    private val _ventasCliente = MutableStateFlow<List<FirebaseVenta>>(emptyList())
+    val ventasCliente: StateFlow<List<FirebaseVenta>> = _ventasCliente.asStateFlow()
+
+    private val _ventasClienteFiltradas = MutableStateFlow<List<FirebaseVenta>>(emptyList())
+    val ventasClienteFiltradas: StateFlow<List<FirebaseVenta>> = _ventasClienteFiltradas.asStateFlow()
+
+    private val _fechaClienteDesde = MutableStateFlow(Fechas.primerDiaDelMes())
+    val fechaClienteDesde: StateFlow<String> = _fechaClienteDesde.asStateFlow()
+    private val _fechaClienteHasta = MutableStateFlow(Fechas.hoy())
+    val fechaClienteHasta: StateFlow<String> = _fechaClienteHasta.asStateFlow()
+
+    private val _ventasClienteAsc = MutableStateFlow(true)
+    val isVentasClienteAsc: StateFlow<Boolean> = _ventasClienteAsc.asStateFlow()
+
+    private val _topProductos = MutableStateFlow<List<TopProducto>>(emptyList())
+    val topProductos: StateFlow<List<TopProducto>> = _topProductos.asStateFlow()
 
     private val _pendingOperaciones = MutableStateFlow<List<Operacion>>(emptyList())
     val pendingOperaciones: StateFlow<List<Operacion>> = _pendingOperaciones.asStateFlow()
@@ -164,6 +238,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val auth = FirebaseAuth.getInstance()
     private val firebaseRepository = FirebaseRepository()
+    /** Referencia propia: [application] de AndroidViewModel es privada. */
+    private val app: Application = application
+
     private val prefs = application.getSharedPreferences("autotransfer", Context.MODE_PRIVATE)
 
     init {
@@ -178,8 +255,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val savedExcelUri = prefs.getString("excel_uri", null)
             if (savedExcelUri != null) {
                 val uri = Uri.parse(savedExcelUri)
-                _excelUri.value = uri
-                _excelFileName.value = prefs.getString("excel_name", null)
+                // Una URI guardada sin permiso persistente (p. ej. elegida con
+                // "Mis archivos" y luego reiniciada la app) es un acceso muerto:
+                // mejor borrarla que arrancar con un error de seguridad al guardar.
+                val app = getApplication<Application>()
+                val permiso = app.contentResolver.persistedUriPermissions.any {
+                    it.uri == uri && it.isReadPermission && it.isWritePermission
+                }
+                if (permiso) {
+                    _excelUri.value = uri
+                    _excelFileName.value = prefs.getString("excel_name", null)
+                } else {
+                    prefs.edit().remove("excel_uri").apply()
+                    prefs.edit().remove("excel_name").apply()
+                }
             }
         } catch (_: Exception) {}
         viewModelScope.launch {
@@ -265,19 +354,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setExcelUri(uri: Uri, fileName: String?) {
         _excelUri.value = uri
         _excelFileName.value = fileName
-        prefs.edit().putString("excel_uri", uri.toString()).apply()
-        prefs.edit().putString("excel_name", fileName).apply()
         treeUri = null
         _rootFolderUri.value = null
         prefs.edit().remove("tree_uri").apply()
-        try {
+
+        val persistido = try {
             val ctx = getApplication<Application>()
             ctx.contentResolver.takePersistableUriPermission(
                 uri,
                 android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or
                         android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
-        } catch (_: SecurityException) {}
+            ctx.contentResolver.persistedUriPermissions.any {
+                it.uri == uri && it.isReadPermission && it.isWritePermission
+            }
+        } catch (_: SecurityException) { false }
+
+        if (persistido) {
+            _excelAccesoTemporal.value = false
+            prefs.edit().putString("excel_uri", uri.toString()).apply()
+            prefs.edit().putString("excel_name", fileName).apply()
+        } else {
+            // No hay permiso persistente (GET_CONTENT de "Mis Archivos"):
+            // guardarlo en prefs dejaria un acceso muerto al reabrir la app.
+            _excelAccesoTemporal.value = true
+            prefs.edit().remove("excel_uri").apply()
+            prefs.edit().remove("excel_name").apply()
+        }
     }
 
     fun setRootFolder(uri: Uri) {
@@ -286,6 +389,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putString("tree_uri", uri.toString()).apply()
         _excelUri.value = null
         _excelFileName.value = null
+        _excelAccesoTemporal.value = false
         prefs.edit().remove("excel_uri").apply()
         prefs.edit().remove("excel_name").apply()
 
@@ -323,15 +427,157 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun firebaseLogout() {
         auth.signOut()
         _firebaseLoginState.value = FirebaseLoginState.Idle
-        _firebaseClientes.value = emptyList()
-        _firebaseVentas.value = emptyList()
-        _ventasFiltradas.value = emptyList()
+        limpiarDatosHolland()
     }
 
-    fun loadFirebaseData(zonas: List<String> = emptyList()) {
-        if (auth.currentUser == null) return
+    private fun limpiarDatosHolland() {
+        _firebaseClientes.value = emptyList()
+        _firebaseClientesZona.value = emptyList()
+        _firebaseVentas.value = emptyList()
+        _ventasFiltradas.value = emptyList()
+        _ventasCliente.value = emptyList()
+        _ventasClienteFiltradas.value = emptyList()
+        _fechaClienteDesde.value = Fechas.primerDiaDelMes()
+        _fechaClienteHasta.value = Fechas.hoy()
+        _resumenClientes.value = emptyList()
+        _resumenClienteFiltro.value = ""
+        _topProductos.value = emptyList()
+        _clientesQuery.value = ""
+        _clientesCiudadQuery.value = ""
+        _clientesCargados.value = false
+        _ventasCargadas.value = false
+        _ultimaSync.value = "Nunca se ha descargado"
+        _syncMensaje.value = null
+        _syncError.value = null
+        zonaEnMemoria = ""
+        // La cache en disco es de la sesion: se borra al salir.
+        HollandCache.borrarTodo(app)
+    }
+
+    // =====================================================================
+    //  Datos de App Holland: una descarga por zona y por dia.
+    //
+    //  Antes cada boton que abrias pegaba a Firestore y se tardaba mucho. Ahora:
+    //   - si esa zona ya se guardo HOY, se lee del disco y no hay red;
+    //   - cambiar de zona descarga solo esa zona;
+    //   - "Actualizar Datos" del menu fuerza la descarga cuando uno quiere frescos.
+    // =====================================================================
+
+    /**
+     * Cliente y Clientes usan EXACTAMENTE el mismo camino que Ventas / Resumen /
+     * Graficos: la cache del dia o una descarga completa.
+     *
+     * Antes Clientes tenia su propia descarga que solo bajaba clientes y guardaba
+     * el archivo con la lista de ventas vacia. Como ademas marcaba la zona como
+     * "ya cargada en memoria", Ventas leia ese archivo con cero ventas y se
+     * quedaba vacio sin forma de recuperarse. Con una sola ruta no puede pasar.
+     */
+    fun cargarClientes(zona: String) {
+        loadFirebaseData(Fechas.zonas(zona))
+    }
+
+    fun setClientesQuery(consulta: String) {
+        _clientesQuery.value = consulta
+        recalcularClientes()
+    }
+
+    /** Caja "Buscar por Ciudad": filtra por la direccion del cliente. */
+    fun setClientesCiudadQuery(consulta: String) {
+        _clientesCiudadQuery.value = consulta
+        recalcularClientes()
+    }
+
+    fun limpiarBusquedaClientes() {
+        _clientesQuery.value = ""
+        _clientesCiudadQuery.value = ""
+        recalcularClientes()
+    }
+
+    fun toggleClientesOrder() {
+        _clientesAsc.value = !_clientesAsc.value
+        recalcularClientes()
+    }
+
+    /**
+     * Las dos cajas se combinan con Y: si escribes en ambas, sale el cliente que
+     * cumple las dos. Cada una es difusa por separado.
+     */
+    private fun recalcularClientes() {
+        _firebaseClientes.value = filtrarClientes(
+            _firebaseClientesZona.value,
+            _clientesQuery.value,
+            _clientesCiudadQuery.value,
+            _clientesAsc.value
+        )
+    }
+
+    /**
+     * Filtro de clientes, separado para poderlo probar.
+     *
+     * OJO con el orden de [Fuzzy.coincide]: es `coincide(texto, consulta)`, o sea
+     * primero el campo del cliente y despues lo que escribio el usuario. Invertirlo
+     * compila bien pero no encuentra nunca.
+     */
+    internal fun filtrarClientes(
+        lista: List<FirebaseCliente>,
+        porNombre: String,
+        porCiudad: String,
+        ascendente: Boolean
+    ): List<FirebaseCliente> {
+        val filtrada = lista.filter { c ->
+            val nombre = porNombre.isBlank() ||
+                Fuzzy.coincide(c.nombre, porNombre) ||
+                Fuzzy.coincide(c.empresa, porNombre)
+            val ciudad = porCiudad.isBlank() || Fuzzy.coincide(c.direccion, porCiudad)
+            nombre && ciudad
+        }
+        return if (ascendente)
+            filtrada.sortedBy { it.nombre.lowercase() }
+        else
+            filtrada.sortedByDescending { it.nombre.lowercase() }
+    }
+
+    fun loadFirebaseData(zonas: List<String> = emptyList(), forzar: Boolean = false) {
+        if (auth.currentUser == null) {
+            // Antes esto hacia `return` en silencio: la pantalla se quedaba en
+            // "No hay clientes" sin explicacion. Ahora se avisa.
+            _syncError.value = "No hay sesión iniciada. Entra de nuevo a App Holland."
+            return
+        }
         if (zonas.isNotEmpty()) saveZonaFilter(zonas)
+        val clave = HollandCache.clave(zonas)
+        _syncError.value = null
+
+        // Se lee el archivo UNA sola vez: antes usarCache() lo leia y lo volvia a
+        // leer despues, o sea el JSON completo dos veces por entrada a pantalla.
+        val deCache = if (forzar) null else HollandCache.leer(app, clave).takeIf { HollandCache.esDeHoy(app, clave) }
+
+        if (deCache != null && zonaEnMemoria == clave) {
+            // Ya esta en memoria de esta misma sesion: no hace falta ni tocar disco
+            if (!_ventasCargadas.value) {
+                aplicarClientesYVentas(deCache.clientes, deCache.ventas)
+            }
+            _ultimaSync.value = HollandCache.textoUltimaSync(app, clave)
+            return
+        }
+        if (deCache != null) {
+            zonaEnMemoria = clave
+            aplicarClientesYVentas(deCache.clientes, deCache.ventas)
+            _ultimaSync.value = HollandCache.textoUltimaSync(app, clave)
+            return
+        }
+
+        descargarTodo(zonas, clave)
+    }
+
+    /** El boton "Actualizar Datos" del menu: ignora la cache y baja todo de nuevo. */
+    fun actualizarDatosFirebase(zonas: List<String> = emptyList()) {
+        loadFirebaseData(zonas, forzar = true)
+    }
+
+    private fun descargarTodo(zonas: List<String>, clave: String) {
         _isFirebaseLoading.value = true
+        _syncMensaje.value = null
         viewModelScope.launch {
             try {
                 val clientes = withContext(Dispatchers.IO) {
@@ -340,9 +586,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val ventas = withContext(Dispatchers.IO) {
                     firebaseRepository.getVentasTransfer()
                 }
-                _firebaseClientes.value = clientes
-                _isFirebaseLoading.value = false
-                _firebaseVentas.value = withContext(Dispatchers.Default) {
+                val filtradas = withContext(Dispatchers.Default) {
                     val zonasNorm = zonas.map { FirebaseRepository.normalizarZona(it) }.filter { it.isNotEmpty() }
                     val nombresZona = clientes
                         .filter { c -> zonasNorm.isEmpty() || zonasNorm.any { z -> FirebaseRepository.normalizarZona(c.zona) == z } }
@@ -355,55 +599,99 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         nombresZona.any { FirebaseRepository.matchNombres(FirebaseRepository.normalizarNombre(v.clienteNombre), it) }
                     }.sortedByDescending { ventaSortKey(it) }
                 }
-
-                setFechas(_fechaDesde.value, _fechaHasta.value)
+                zonaEnMemoria = clave
+                aplicarClientesYVentas(clientes, filtradas)
+                HollandCache.guardar(app, clave, HollandCache.Datos(clientes, filtradas))
+                _ultimaSync.value = HollandCache.textoUltimaSync(app, clave)
+                _syncMensaje.value = "Datos actualizados: ${clientes.size} clientes, ${filtradas.size} ventas"
             } catch (e: Exception) {
                 _uiState.value = UiState.Error("Error cargando datos Firebase: ${e.message}")
-                _isFirebaseLoading.value = false
+                _syncError.value = "No se pudo descargar: ${e.message}"
             }
+            _isFirebaseLoading.value = false
         }
     }
 
-    fun searchFirebaseClientes(query: String, zonas: List<String> = emptyList()) {
-        viewModelScope.launch {
-            try {
-                val results = withContext(Dispatchers.IO) {
-                    firebaseRepository.searchClientes(query, zonas)
-                }
-                _firebaseClientes.value = results
-            } catch (e: Exception) {
-                _uiState.value = UiState.Error("Error buscando clientes: ${e.message}")
-            }
-        }
+    private fun aplicarClientesYVentas(
+        clientes: List<FirebaseCliente>,
+        ventas: List<FirebaseVenta>
+    ) {
+        _firebaseClientesZona.value = clientes
+        _clientesCargados.value = true
+        recalcularClientes()
+        _firebaseVentas.value = ventas
+        _ventasCargadas.value = true
+        setFechas(_fechaDesde.value, _fechaHasta.value)
     }
 
-    fun loadVentasByCliente(clienteNombre: String, zonas: List<String> = emptyList()) {
+    /** Para el menu: cuando se entro a la zona. */
+    fun refrescarEstadoSync(zonas: List<String>) {
+        _ultimaSync.value = HollandCache.textoUltimaSync(app, HollandCache.clave(zonas))
+    }
+
+    fun limpiarMensajeSync() {
+        _syncMensaje.value = null
+    }
+
+    /**
+     * Ventas de un cliente para la pantalla de detalle. No toca _firebaseVentas,
+     * asi que no rompe las pantallas de Ventas / Resumen / Graficos.
+     * [reiniciarRango] vuelve al default: dia 1 del mes en curso -> hoy.
+     */
+    fun cargarVentasDeCliente(clienteNombre: String, reiniciarRango: Boolean = true) {
+        if (auth.currentUser == null) return
+        if (clienteNombre.isBlank()) return
+        _isFirebaseLoading.value = true
         viewModelScope.launch {
-            _isFirebaseLoading.value = true
             try {
                 val ventas = withContext(Dispatchers.IO) {
                     firebaseRepository.getVentasByCliente(clienteNombre)
                         .sortedByDescending { ventaSortKey(it) }
                 }
-                val ventasFiltradas = if (zonas.isNotEmpty()) {
-                    val zonasNorm = zonas.map { FirebaseRepository.normalizarZona(it) }.filter { it.isNotEmpty() }
-                    val nombresZona = _firebaseClientes.value
-                        .filter { c -> zonasNorm.any { z -> FirebaseRepository.normalizarZona(c.zona) == z } }
-                        .map { it.nombre.lowercase().trim() }
-                    ventas.filter { v ->
-                        val vZona = FirebaseRepository.normalizarZona(v.zonaVenta)
-                        val ventaTieneZona = v.zonaVenta.isNotBlank() && vZona.isNotEmpty()
-                        if (ventaTieneZona) return@filter vZona in zonasNorm
-                        nombresZona.any { FirebaseRepository.matchNombres(FirebaseRepository.normalizarNombre(v.clienteNombre), it) }
-                    }
-                } else ventas
-                _firebaseVentas.value = ventasFiltradas
-                setFechas(_fechaDesde.value, _fechaHasta.value)
+                _ventasCliente.value = ventas
+                if (reiniciarRango) {
+                    _fechaClienteDesde.value = Fechas.primerDiaDelMes()
+                    _fechaClienteHasta.value = Fechas.hoy()
+                }
+                aplicarRangoCliente()
             } catch (e: Exception) {
                 _uiState.value = UiState.Error("Error cargando ventas: ${e.message}")
             }
             _isFirebaseLoading.value = false
         }
+    }
+
+    fun refrescarVentasDeCliente(clienteNombre: String) =
+        cargarVentasDeCliente(clienteNombre, reiniciarRango = false)
+
+    fun setFechasCliente(desde: String, hasta: String) {
+        _fechaClienteDesde.value = desde
+        _fechaClienteHasta.value = hasta
+        viewModelScope.launch(Dispatchers.Default) { aplicarRangoCliente() }
+    }
+
+    /** Vuelve el detalle de cliente al rango del mes en curso. */
+    fun restablecerFechasCliente() {
+        val (desde, hasta) = Fechas.rangoPorDefecto()
+        setFechasCliente(desde, hasta)
+    }
+
+    fun toggleVentasClienteOrder() {
+        _ventasClienteAsc.value = !_ventasClienteAsc.value
+        viewModelScope.launch(Dispatchers.Default) { aplicarRangoCliente() }
+    }
+
+    private fun aplicarRangoCliente() {
+        val desde = _fechaClienteDesde.value
+        val hasta = _fechaClienteHasta.value
+        val desdeNum = if (desde.isNotBlank()) parseFecha(desde) else 0L
+        val hastaNum = if (hasta.isNotBlank()) parseFecha(hasta) else Long.MAX_VALUE
+        val filtradas = _ventasCliente.value
+            .filter { parseFecha(it.fechaSubidoString) in desdeNum..hastaNum }
+        _ventasClienteFiltradas.value = if (_ventasClienteAsc.value)
+            filtradas.sortedBy { ventaSortKey(it) }
+        else
+            filtradas.sortedByDescending { ventaSortKey(it) }
     }
 
     fun diagnosticFirestore() {
@@ -449,6 +737,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         prefs.edit().putString("zona_filter", zonas.joinToString(",")).apply()
     }
 
+    private var jobFechas: Job? = null
+
     fun toggleVentasOrder() {
         _isAscending.value = !_isAscending.value
         _firebaseVentas.value = if (_isAscending.value)
@@ -458,10 +748,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         setFechas(_fechaDesde.value, _fechaHasta.value)
     }
 
+    /** Aplica el rango global y recalcula resumen y graficos en un solo paso. */
     fun setFechas(desde: String, hasta: String) {
         _fechaDesde.value = desde
         _fechaHasta.value = hasta
-        viewModelScope.launch(Dispatchers.Default) {
+        jobFechas?.cancel()
+        jobFechas = viewModelScope.launch(Dispatchers.Default) {
             val desdeNum = if (desde.isNotBlank()) parseFecha(desde) else 0L
             val hastaNum = if (hasta.isNotBlank()) parseFecha(hasta) else Long.MAX_VALUE
             val filtradas = _firebaseVentas.value.filter { v ->
@@ -470,7 +762,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             _ventasFiltradas.value = filtradas
             recalcularResumen()
+            recalcularTopProductos()
         }
+    }
+
+    /**
+     * Igual que [setFechas]. El rango ya NO se guarda entre sesiones: al abrir la
+     * app se vuelve al rango del mes ([Fechas.rangoPorDefecto]).
+     */
+    fun setFechasYGuardar(desde: String, hasta: String) = setFechas(desde, hasta)
+
+    /** Vuelve al rango del mes en curso. Es lo que hace el boton "Restablecer". */
+    fun restablecerFechas() {
+        val (desde, hasta) = Fechas.rangoPorDefecto()
+        setFechas(desde, hasta)
     }
 
     fun toggleResumenOrder() {
@@ -501,6 +806,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             agrupado.sortedByDescending { it.total }
     }
 
+    /** Agrega los productos de las ventas del rango para la pantalla de graficos. */
+    private fun recalcularTopProductos() {
+        _topProductos.value = _ventasFiltradas.value
+            .flatMap { it.productos }
+            .groupBy { p ->
+                val nombre = p["nombre"]?.toString()?.trim().orEmpty()
+                if (nombre.isNotEmpty()) nombre else p["tipo"]?.toString()?.trim().orEmpty()
+            }
+            .filterKeys { it.isNotEmpty() }
+            .map { (nombre, lista) ->
+                TopProducto(
+                    nombre = nombre,
+                    total = lista.sumOf { (it["total"] as? Number)?.toDouble() ?: 0.0 },
+                    piezas = lista.sumOf {
+                        ((it["piezasVenta"] as? Number)?.toInt() ?: 0) +
+                            ((it["piezasBono"] as? Number)?.toInt() ?: 0)
+                    }
+                )
+            }
+            .sortedByDescending { it.total }
+    }
+
     private fun parseFecha(fecha: String): Long {
         if (fecha.isBlank()) return 0L
         val partes = fecha.split("-", "/")
@@ -513,10 +840,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return (anio + mes + dia).toLongOrNull() ?: 0L
     }
 
-    fun getSavedFechaDesde(): String = prefs.getString("fecha_desde", "") ?: ""
-    fun getSavedFechaHasta(): String = prefs.getString("fecha_hasta", "") ?: ""
-    fun saveFechaDesde(fecha: String) { prefs.edit().putString("fecha_desde", fecha).apply() }
-    fun saveFechaHasta(fecha: String) { prefs.edit().putString("fecha_hasta", fecha).apply() }
+    /**
+     * La app siempre abre con "primer dia del mes -> hoy". Se conserva la firma
+     * para no tocar los dos lugares de MainActivity que la usan.
+     */
+    fun getSavedFechaDesde(): String = Fechas.primerDiaDelMes()
+    fun getSavedFechaHasta(): String = Fechas.hoy()
+    fun saveFechaDesde(fecha: String) = Unit
+    fun saveFechaHasta(fecha: String) = Unit
 
     private fun extraerFolio(id: String): Long {
         val idx = id.lastIndexOf('-')
@@ -736,34 +1067,46 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val _confirmarGrabar = MutableStateFlow(false)
+    val confirmarGrabar: StateFlow<Boolean> = _confirmarGrabar.asStateFlow()
+
+    /** Un toque en "Grabar datos Excel": primero se pide confirmacion. */
+    fun solicitarGrabar() { _confirmarGrabar.value = true }
+
+    fun cancelarGrabar() { _confirmarGrabar.value = false }
+
     fun grabarDatosExcel() {
+        _confirmarGrabar.value = false
         if (auth.currentUser == null) {
-            _uiState.value = UiState.Error("No hay sesión de Firebase")
+            _uiState.value = UiState.Error("No hay sesion de Firebase")
             return
         }
         val excelUri = _excelUri.value
         if (excelUri == null) {
-            _uiState.value = UiState.Error("Selecciona el archivo Formato Transfer.xlsx primero")
+            _uiState.value = UiState.Error("Selecciona tu archivo de Excel primero")
             return
         }
         val ops = _pendingOperaciones.value
         if (ops.isEmpty()) {
-            _uiState.value = UiState.Error("No hay datos pendientes para grabar. Procesa desde Firebase primero.")
+            _uiState.value = UiState.Error("No hay datos pendientes. Procesa desde Firebase primero.")
             return
         }
         _uiState.value = UiState.Processing("Grabando datos en Excel...")
         viewModelScope.launch {
             try {
                 val ctx = getApplication<Application>()
-                val resultMsg = withContext(Dispatchers.IO) {
+                val resultado = withContext(Dispatchers.IO) {
                     excelManager.updateExcel(ctx, excelUri, ops)
                 }
-                _pendingOperaciones.value = emptyList()
+                // Los pendientes NO se vacían solos: OneDrive puede reportar éxito
+                // sin que el archivo cambie de verdad (mtime congelada). Vuelve a
+                // grabar es seguro (updateExcel busca por noTransfer) y el usuario
+                // decide cuándo limpiar con el botón manual.
                 val result = UiState.Result(
-                    message = resultMsg,
-                    processedCount = ops.size,
-                    errorCount = 0,
-                    operaciones = ops
+                    message = resultado.mensaje,
+                    processedCount = if (resultado.exito) ops.size else 0,
+                    errorCount = if (resultado.exito) 0 else 1,
+                    operaciones = emptyList()
                 )
                 _lastResult.value = result
                 _uiState.value = result
@@ -773,41 +1116,69 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun grabarDatosExcelEn(destinoUri: android.net.Uri) {
+    /**
+     * "Guardar copia en otro lugar": genera el Excel con los pendientes y lo
+     * escribe en el destino que eligió el usuario (ACTION_CREATE_DOCUMENT).
+     * No toca el archivo de OneDrive original y NO vacía los pendientes: es
+     * solo una copia, el original puede seguir fallando.
+     */
+    fun guardarCopiaEn(destinoUri: Uri) {
         if (auth.currentUser == null) {
-            _uiState.value = UiState.Error("No hay sesión de Firebase")
+            _uiState.value = UiState.Error("No hay sesion de Firebase")
             return
         }
         val excelUri = _excelUri.value
         if (excelUri == null) {
-            _uiState.value = UiState.Error("Selecciona el archivo Formato Transfer.xlsx primero")
+            _uiState.value = UiState.Error("Selecciona tu archivo de Excel primero")
             return
         }
         val ops = _pendingOperaciones.value
         if (ops.isEmpty()) {
-            _uiState.value = UiState.Error("No hay datos pendientes para grabar. Procesa desde Firebase primero.")
+            _uiState.value = UiState.Error("No hay datos pendientes. Procesa desde Firebase primero.")
             return
         }
-        _uiState.value = UiState.Processing("Guardando copia nueva del Excel...")
+        _uiState.value = UiState.Processing("Guardando copia...")
         viewModelScope.launch {
             try {
                 val ctx = getApplication<Application>()
-                val resultMsg = withContext(Dispatchers.IO) {
-                    excelManager.guardarCopiaNueva(ctx, excelUri, destinoUri, ops)
+                val resultado = withContext(Dispatchers.IO) {
+                    excelManager.guardarCopiaEn(ctx, excelUri, destinoUri, ops)
                 }
-                _pendingOperaciones.value = emptyList()
                 val result = UiState.Result(
-                    message = resultMsg,
-                    processedCount = ops.size,
-                    errorCount = 0,
-                    operaciones = ops
+                    message = resultado.mensaje,
+                    processedCount = if (resultado.exito) ops.size else 0,
+                    errorCount = if (resultado.exito) 0 else 1,
+                    operaciones = emptyList()
                 )
                 _lastResult.value = result
                 _uiState.value = result
             } catch (e: Exception) {
-                _uiState.value = UiState.Error("Error guardando copia Excel: ${e.message}")
+                _uiState.value = UiState.Error("Error guardando copia: ${e.message}")
             }
         }
+    }
+
+    /** Botón manual para quitar los pendientes (después de confirmar el archivo). */
+    fun limpiarPendientes() {
+        _pendingOperaciones.value = emptyList()
+    }
+
+    private val _diagnosticoEscritura = MutableStateFlow<Pair<String, Boolean>?>(null)
+
+    /** `(texto, ok)`: ok = se leyó algo del archivo, para pintar el botón de color. */
+    val diagnosticoEscritura: StateFlow<Pair<String, Boolean>?> = _diagnosticoEscritura.asStateFlow()
+
+    fun generarDiagnosticoEscritura() {
+        val ctx = getApplication<Application>()
+        val uri = _excelUri.value
+        viewModelScope.launch {
+            val texto = withContext(Dispatchers.IO) { excelManager.diagnosticarEscritura(ctx, uri) }
+            _diagnosticoEscritura.value = texto to (uri != null)
+        }
+    }
+
+    fun cerrarDiagnosticoEscritura() {
+        _diagnosticoEscritura.value = null
     }
 
     // Casos especiales de direcciones donde la lógica no puede inferir la ciudad
@@ -1296,7 +1667,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         } else op
                     }
 
-                    val resultMsg = excelManager.updateExcel(ctx, contents.excelFile.uri, operacionesConCiudades)
+                    val grabado = excelManager.updateExcel(ctx, contents.excelFile.uri, operacionesConCiudades)
+                    val resultMsg = grabado.mensaje
 
                     cityRepository.updateFromOperaciones(operacionesConCiudades)
 
@@ -1311,7 +1683,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val result = UiState.Result(
                         message = resultMsg,
                         processedCount = processedCount,
-                        errorCount = errorCount,
+                        errorCount = errorCount + if (grabado.exito) 0 else 1,
                         operaciones = operacionesConCiudades
                     )
                     _lastResult.value = result

@@ -1,5 +1,7 @@
 {
     "excelFileName": "Formato Transfer.xlsx",
+    "machoteSheet": "Machote en blanco",
+    "plantillaSheet": "Machote en blanco",
     "headerRow": 5,
     "dataStartRow": 6,
     "columnaId": "B",

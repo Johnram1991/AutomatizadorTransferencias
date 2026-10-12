@@ -46,6 +46,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,10 +59,14 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
-import com.autotransfer.data.firebase.FirebaseCliente
-import com.autotransfer.data.firebase.FirebaseVenta
+import com.autotransfer.ui.holland.HollandScreen
 import com.autotransfer.ui.login.LoginDialog
+import com.autotransfer.ui.splash.OsirisSplash
 import com.autotransfer.ui.theme.SithTheme
+import com.autotransfer.util.Fechas
+
+private const val XLSX_MIME =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -78,6 +83,17 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AutoTransferApp(viewModel: MainViewModel) {
+    var splash by rememberSaveable { mutableStateOf(true) }
+
+    if (splash) {
+        OsirisSplash(
+            title = "Auto Transfer",
+            subtitle = "By John Ram",
+            onTimeout = { splash = false }
+        )
+        return
+    }
+
     val loginState by viewModel.firebaseLoginState.collectAsState()
     val uiState by viewModel.uiState.collectAsState()
     val rootFolderUri by viewModel.rootFolderUri.collectAsState()
@@ -333,11 +349,7 @@ private fun MainScreen(
     val excelUriState by viewModel.excelUri.collectAsState()
     val excelFileNameState by viewModel.excelFileName.collectAsState()
     val pendingOps by viewModel.pendingOperaciones.collectAsState()
-    val copiaSugerida = remember(excelFileNameState) {
-        val base = excelFileNameState?.removeSuffix(".xlsx") ?: "Formato Transfer"
-        "${base}_PROCESADO.xlsx"
-    }
-
+    val excelAccesoTemporal by viewModel.excelAccesoTemporal.collectAsState()
     val folderPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
@@ -382,11 +394,10 @@ private fun MainScreen(
     }
 
     val crearCopiaLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    ) { uri ->
-        uri?.let {
-            viewModel.grabarDatosExcelEn(it)
-        }
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        val uri = if (result.resultCode == Activity.RESULT_OK) result.data?.data else null
+        uri?.let { viewModel.guardarCopiaEn(it) }
     }
 
     Column(
@@ -395,18 +406,71 @@ private fun MainScreen(
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        var mostrarOpcionesExcel by remember { mutableStateOf(false) }
+
         Button(
-            onClick = {
-                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                    addCategory(Intent.CATEGORY_OPENABLE)
-                    type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                }
-                excelPickerLauncher.launch(Intent.createChooser(intent, "Seleccionar archivo Excel"))
-            },
+            onClick = { mostrarOpcionesExcel = true },
             modifier = Modifier.fillMaxWidth()
         ) {
             Text("Seleccionar archivo Formato Transfer.xlsx")
+        }
+
+        if (mostrarOpcionesExcel) {
+            AlertDialog(
+                onDismissRequest = { mostrarOpcionesExcel = false },
+                title = { Text("¿Dónde está tu Excel?") },
+                text = {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(
+                            onClick = {
+                                mostrarOpcionesExcel = false
+                                val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                                    addCategory(Intent.CATEGORY_OPENABLE)
+                                    type = XLSX_MIME
+                                    addFlags(
+                                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                                    )
+                                }
+                                excelPickerLauncher.launch(
+                                    Intent.createChooser(intent, "Seleccionar archivo Excel")
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Drive / Archivos del sistema") }
+
+                        OutlinedButton(
+                            onClick = {
+                                mostrarOpcionesExcel = false
+                                val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                                    addCategory(Intent.CATEGORY_OPENABLE)
+                                    type = XLSX_MIME
+                                    addFlags(
+                                        Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                                Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                                    )
+                                }
+                                excelPickerLauncher.launch(
+                                    Intent.createChooser(intent, "Seleccionar archivo Excel")
+                                )
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("Mis archivos (Samsung) u otras apps") }
+
+                        Text(
+                            "Si tu Excel está en OneDrive o Google Drive, usa " +
+                                "\"Drive / Archivos del sistema\": con \"Mis archivos\" " +
+                                "esos archivos solo se pueden leer. \"Drive / Archivos\" " +
+                                "guarda el acceso aunque cierres la app; \"Mis archivos\" " +
+                                "solo dura mientras la app esté abierta.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { mostrarOpcionesExcel = false }) { Text("Cancelar") }
+                }
+            )
         }
 
         if (excelFileNameState != null) {
@@ -415,6 +479,14 @@ private fun MainScreen(
                 color = MaterialTheme.colorScheme.primary,
                 style = MaterialTheme.typography.bodySmall
             )
+            if (excelAccesoTemporal) {
+                Text(
+                    "Elegido con Mis Archivos: el acceso dura hasta que cierres la app. " +
+                        "Si la app se reinicia, vuelve a seleccionarlo.",
+                    color = MaterialTheme.colorScheme.tertiary,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
         } else if (excelUriState != null) {
             Text(
                 "Archivo Excel seleccionado ✓",
@@ -572,7 +644,7 @@ private fun MainScreen(
                     Button(onClick = {
                         viewModel.saveFechaDesde(fbDesde)
                         viewModel.saveFechaHasta(fbHasta)
-                        viewModel.procesarDesdeFirebase(fbDesde, fbHasta, parseZonas(fbZonas))
+                        viewModel.procesarDesdeFirebase(fbDesde, fbHasta, Fechas.zonas(fbZonas))
                         showFirebaseProcess = false
                     }) { Text("Ejecutar") }
                 },
@@ -587,7 +659,7 @@ private fun MainScreen(
                     onDismissRequest = { fbShowDesde = false },
                     confirmButton = {
                         TextButton(onClick = {
-                            st.selectedDateMillis?.let { fbDesde = millisToDateStr(it) }
+                            st.selectedDateMillis?.let { fbDesde = Fechas.deMillis(it) }
                             fbShowDesde = false
                         }) { Text("Aceptar") }
                     },
@@ -602,7 +674,7 @@ private fun MainScreen(
                     onDismissRequest = { fbShowHasta = false },
                     confirmButton = {
                         TextButton(onClick = {
-                            st.selectedDateMillis?.let { fbHasta = millisToDateStr(it) }
+                            st.selectedDateMillis?.let { fbHasta = Fechas.deMillis(it) }
                             fbShowHasta = false
                         }) { Text("Aceptar") }
                     },
@@ -696,17 +768,44 @@ private fun MainScreen(
                 if (pendingOps.isNotEmpty() && pendientes.isEmpty()) {
                     Spacer(modifier = Modifier.height(8.dp))
                     Button(
-                        onClick = { viewModel.grabarDatosExcel() },
+                        onClick = { viewModel.solicitarGrabar() },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text("💾 Grabar datos Excel")
                     }
+
                     Spacer(modifier = Modifier.height(8.dp))
                     OutlinedButton(
-                        onClick = { crearCopiaLauncher.launch(copiaSugerida) },
+                        onClick = {
+                            val ts = java.text.SimpleDateFormat(
+                                "yyyyMMdd_HHmmss", java.util.Locale.US
+                            ).format(java.util.Calendar.getInstance().time)
+                            val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                                addCategory(Intent.CATEGORY_OPENABLE)
+                                type = XLSX_MIME
+                                putExtra(Intent.EXTRA_TITLE, "FormatoTransfer_NUEVO_$ts.xlsx")
+                            }
+                            crearCopiaLauncher.launch(intent)
+                        },
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("📄 Guardar copia nueva (formato actual)")
+                        Text("📄 Guardar copia en otro lugar…")
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { viewModel.limpiarPendientes() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("✖ Limpiar pendientes (ya confirmé el archivo)")
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    OutlinedButton(
+                        onClick = { viewModel.generarDiagnosticoEscritura() },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("🔬 Ver diagnóstico de escritura")
                     }
                 }
 
@@ -745,504 +844,50 @@ private fun MainScreen(
         )
     }
 
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun HollandScreen(viewModel: MainViewModel, onBack: () -> Unit) {
-    val firebaseClientes by viewModel.firebaseClientes.collectAsState()
-    val firebaseVentas by viewModel.firebaseVentas.collectAsState()
-    val resumenClientes by viewModel.resumenClientes.collectAsState()
-    val isLoading by viewModel.isFirebaseLoading.collectAsState()
-    val loginState by viewModel.firebaseLoginState.collectAsState()
-
-    var tab by remember { mutableStateOf("clientes") }
-    var searchQuery by remember { mutableStateOf("") }
-    val savedZona = remember { viewModel.getSavedZonaFilter() }
-    var zonaFilter by remember { mutableStateOf(savedZona) }
-    var dataLoaded by remember { mutableStateOf(false) }
-    val ventasFiltradas by viewModel.ventasFiltradas.collectAsState()
-    var fechaDesdeLocal by remember { mutableStateOf("") }
-    var fechaHastaLocal by remember { mutableStateOf("") }
-
-    LaunchedEffect(Unit) {
-        fechaDesdeLocal = viewModel.getSavedFechaDesde()
-        fechaHastaLocal = viewModel.getSavedFechaHasta()
-        if (fechaDesdeLocal.isNotEmpty() || fechaHastaLocal.isNotEmpty()) {
-            viewModel.setFechas(fechaDesdeLocal, fechaHastaLocal)
-        }
-    }
-
-    val isLoggedIn = loginState is FirebaseLoginState.LoggedIn
-
-    if (isLoggedIn && !dataLoaded) {
-        dataLoaded = true
-        LaunchedEffect(Unit) {
-            viewModel.loadFirebaseData(parseZonas(zonaFilter))
-        }
-    }
-
-    Column(
-        modifier = Modifier.fillMaxSize().padding(top = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Button(onClick = {
-            dataLoaded = false
-            onBack()
-        }, modifier = Modifier.fillMaxWidth()) {
-            Text("← Volver")
-        }
-
-        if (!isLoggedIn) {
-            Text("Sesión cerrada",
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            return
-        }
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedButton(
-                onClick = { tab = "clientes"; viewModel.searchFirebaseClientes(searchQuery, parseZonas(zonaFilter)) },
-                modifier = Modifier.weight(1f),
-                colors = if (tab == "clientes") ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.primary
-                ) else ButtonDefaults.outlinedButtonColors()
-            ) { Text("Clientes (${firebaseClientes.size})") }
-            OutlinedButton(
-                onClick = { tab = "ventas" },
-                modifier = Modifier.weight(1f),
-                colors = if (tab == "ventas") ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.primary
-                ) else ButtonDefaults.outlinedButtonColors()
-            ) { Text("Ventas (${firebaseVentas.size})") }
-            OutlinedButton(
-                onClick = { tab = "resumen" },
-                modifier = Modifier.weight(1f),
-                colors = if (tab == "resumen") ButtonDefaults.outlinedButtonColors(
-                    contentColor = MaterialTheme.colorScheme.primary
-                ) else ButtonDefaults.outlinedButtonColors()
-            ) { Text("Resumen (${resumenClientes.size})") }
-        }
-
-        if (tab != "clientes") {
-            HollandDateFilter(
-                fechaDesde = fechaDesdeLocal,
-                fechaHasta = fechaHastaLocal,
-                onDesde = { f ->
-                    fechaDesdeLocal = f
-                    viewModel.setFechas(f, fechaHastaLocal)
-                    viewModel.saveFechaDesde(f)
-                },
-                onHasta = { f ->
-                    fechaHastaLocal = f
-                    viewModel.setFechas(fechaDesdeLocal, f)
-                    viewModel.saveFechaHasta(f)
-                },
-                onClear = {
-                    fechaDesdeLocal = ""; fechaHastaLocal = ""
-                    viewModel.setFechas("", "")
-                    viewModel.saveFechaDesde(""); viewModel.saveFechaHasta("")
-                }
-            )
-        }
-
-        when (tab) {
-            "clientes" -> {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { searchQuery = it; viewModel.searchFirebaseClientes(it, parseZonas(zonaFilter)) },
-                    label = { Text("Buscar cliente") },
-                    modifier = Modifier.weight(1f),
-                    singleLine = true
+    val confirmarGrabar by viewModel.confirmarGrabar.collectAsState()
+    if (confirmarGrabar && pendingOps.isNotEmpty()) {
+        AlertDialog(
+            onDismissRequest = { viewModel.cancelarGrabar() },
+            title = { Text("¿Sobrescribir tu Excel?") },
+            text = {
+                Text(
+                    "Se van a escribir ${pendingOps.size} transferencias en tu archivo.\n\n" +
+                            "No se guarda ninguna copia del anterior."
                 )
-                OutlinedTextField(
-                    value = zonaFilter,
-                    onValueChange = {
-                        zonaFilter = it
-                        viewModel.searchFirebaseClientes(searchQuery, parseZonas(it))
-                        viewModel.saveZonaFilter(parseZonas(it))
-                    },
-                    label = { Text("Zonas") },
-                    modifier = Modifier.width(100.dp),
-                    singleLine = true,
-                    placeholder = { Text("25,26") }
-                )
-                OutlinedButton(
-                    onClick = {
-                        zonaFilter = ""
-                        viewModel.searchFirebaseClientes(searchQuery, emptyList())
-                    },
-                    modifier = Modifier.height(48.dp)
-                ) { Text("⟲", fontSize = 12.sp) }
-            }
-
-            Text("${firebaseClientes.size} clientes",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodySmall)
-
-            if (isLoading) {
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
-            } else {
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    items(firebaseClientes, key = { it.id }) { c ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant
-                            ),
-                            onClick = {
-                                viewModel.loadVentasByCliente(c.nombre, parseZonas(zonaFilter))
-                                tab = "ventas"
-                            }
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text(c.nombre, fontWeight = FontWeight.Bold)
-                                Row {
-                                    if (c.zona.isNotBlank()) {
-                                        Text("Zona: ${c.zona}  ",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.primary)
-                                    }
-                                    if (c.empresa.isNotBlank()) {
-                                        Text(c.empresa, style = MaterialTheme.typography.bodySmall)
-                                    }
-                                }
-                                if (c.direccion.isNotBlank()) Text("Dirección: ${c.direccion}", style = MaterialTheme.typography.bodySmall)
-                                if (c.telefono.isNotBlank()) Text("Tel: ${c.telefono}", style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                    }
-                }
-            }
-        }
-            "ventas" -> {
-            val totalGeneral = ventasFiltradas.sumOf { it.total }
-            val fmt = java.text.NumberFormat.getCurrencyInstance(java.util.Locale("es", "MX"))
-
-            if (ventasFiltradas.isNotEmpty()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(
-                        containerColor = MaterialTheme.colorScheme.primaryContainer
-                    )
-                ) {
-                    Column(modifier = Modifier.padding(12.dp)) {
-                        if (ventasFiltradas.first().clienteNombre == ventasFiltradas.last().clienteNombre) {
-                            Text(ventasFiltradas.first().clienteNombre,
-                                fontWeight = FontWeight.Bold)
-                        }
-                        Text("Total comprado: ${fmt.format(totalGeneral)}",
-                            fontWeight = FontWeight.SemiBold)
-                        Text("${ventasFiltradas.size} ventas",
-                            style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
-
-            val asc by viewModel.isAscending.collectAsState()
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
-                if (ventasFiltradas.isNotEmpty()) {
-                    OutlinedButton(onClick = { viewModel.toggleVentasOrder() }) {
-                        Text(if (asc) "↑ Ascendente" else "↓ Descendente")
-                    }
-                }
-            }
-
-            if (isLoading) {
-                CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
-            } else if (ventasFiltradas.isEmpty()) {
-                Text("No hay ventas en este rango. Toca un cliente para ver sus ventas.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall)
-            } else {
-                val direccionPorNombre = remember(firebaseClientes) {
-                    firebaseClientes.associate { it.nombre.lowercase().trim() to it.direccion }
-                }
-
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    items(ventasFiltradas, key = { it.id }) { v ->
-                        VentaItemCard(v, direccionPorNombre)
-                    }
-                }
-            }
-        }
-            "resumen" -> {
-                val resumen by viewModel.resumenClientes.collectAsState()
-                val resumenAsc by viewModel.resumenAsc.collectAsState()
-                val fmt = java.text.NumberFormat.getCurrencyInstance(java.util.Locale("es", "MX"))
-                var clienteFiltro by remember { mutableStateOf("") }
-                var selectedCliente by remember { mutableStateOf<String?>(null) }
-                val direccionPorNombre = remember(firebaseClientes) {
-                    firebaseClientes.associate { it.nombre.lowercase().trim() to it.direccion }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedTextField(
-                        value = clienteFiltro,
-                        onValueChange = {
-                            clienteFiltro = it
-                            viewModel.setResumenClienteFiltro(it)
-                        },
-                        label = { Text("Filtrar cliente") },
-                        modifier = Modifier.weight(1f),
-                        singleLine = true
-                    )
-                    OutlinedTextField(
-                        value = zonaFilter,
-                        onValueChange = {
-                            zonaFilter = it
-                            viewModel.saveZonaFilter(parseZonas(it))
-                            viewModel.loadFirebaseData(parseZonas(it))
-                        },
-                        label = { Text("Zona") },
-                        modifier = Modifier.width(100.dp),
-                        singleLine = true,
-                        placeholder = { Text("25") }
-                    )
-                    OutlinedButton(
-                        onClick = {
-                            clienteFiltro = ""
-                            viewModel.limpiarResumenClienteFiltro()
-                        },
-                        modifier = Modifier.height(48.dp)
-                    ) { Text("⟲", fontSize = 12.sp) }
-                }
-
-                if (selectedCliente != null) {
-                    Button(
-                        onClick = {
-                            selectedCliente = null
-                            viewModel.limpiarResumenClienteFiltro()
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    ) { Text("← Volver al resumen") }
-                    val ventasCliente = ventasFiltradas.filter {
-                        it.clienteNombre.trim().ifEmpty { "Sin nombre" } == selectedCliente
-                    }
-                    val totalCliente = ventasCliente.sumOf { it.total }
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer
-                        )
-                    ) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text(selectedCliente ?: "", fontWeight = FontWeight.Bold)
-                            Text("Total comprado: ${fmt.format(totalCliente)}",
-                                fontWeight = FontWeight.SemiBold)
-                            Text("${ventasCliente.size} ventas en el rango",
-                                style = MaterialTheme.typography.bodySmall)
-                        }
-                    }
-                    if (isLoading) {
-                        CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
-                    } else if (ventasCliente.isEmpty()) {
-                        Text("No hay ventas de este cliente en el rango.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall)
-                    } else {
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            items(ventasCliente, key = { it.id }) { v ->
-                                VentaItemCard(v, direccionPorNombre)
-                            }
-                        }
-                    }
-                } else {
-                    if (resumen.isNotEmpty()) {
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.primaryContainer
-                            )
-                        ) {
-                            Column(modifier = Modifier.padding(12.dp)) {
-                                Text("Total general: ${fmt.format(resumen.sumOf { it.total })}",
-                                    fontWeight = FontWeight.Bold)
-                                Text("${resumen.size} clientes en el rango",
-                                    style = MaterialTheme.typography.bodySmall)
-                            }
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.End
-                    ) {
-                        if (resumen.isNotEmpty()) {
-                            OutlinedButton(onClick = { viewModel.toggleResumenOrder() }) {
-                                Text(if (resumenAsc) "↑ Menor total" else "↓ Mayor total")
-                            }
-                        }
-                    }
-
-                    if (isLoading) {
-                        CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
-                    } else if (resumen.isEmpty()) {
-                        Text("No hay ventas en este rango para la zona seleccionada.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall)
-                    } else {
-                        LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            items(resumen, key = { it.cliente }) { r ->
-                                Card(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    colors = CardDefaults.cardColors(
-                                        containerColor = MaterialTheme.colorScheme.surfaceVariant
-                                    ),
-                                    onClick = { selectedCliente = r.cliente }
-                                ) {
-                                    Column(modifier = Modifier.padding(12.dp)) {
-                                        Text(r.cliente, fontWeight = FontWeight.Bold)
-                                        Text("${r.numVentas} ventas",
-                                            style = MaterialTheme.typography.bodySmall)
-                                        Text(fmt.format(r.total),
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = MaterialTheme.colorScheme.primary)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun HollandDateFilter(
-    fechaDesde: String,
-    fechaHasta: String,
-    onDesde: (String) -> Unit,
-    onHasta: (String) -> Unit,
-    onClear: () -> Unit
-) {
-    var showDesdePicker by remember { mutableStateOf(false) }
-    var showHastaPicker by remember { mutableStateOf(false) }
-
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        OutlinedButton(
-            onClick = { showDesdePicker = true },
-            modifier = Modifier.weight(1f)
-        ) {
-            Text(if (fechaDesde.isBlank()) "📅 Desde" else fechaDesde, fontSize = 11.sp)
-        }
-        OutlinedButton(
-            onClick = { showHastaPicker = true },
-            modifier = Modifier.weight(1f)
-        ) {
-            Text(if (fechaHasta.isBlank()) "📅 Hasta" else fechaHasta, fontSize = 11.sp)
-        }
-        OutlinedButton(onClick = onClear, modifier = Modifier.height(40.dp)) {
-            Text("⟲", fontSize = 12.sp)
-        }
-    }
-
-    if (showDesdePicker) {
-        val state = androidx.compose.material3.rememberDatePickerState()
-        androidx.compose.material3.DatePickerDialog(
-            onDismissRequest = { showDesdePicker = false },
+            },
             confirmButton = {
-                TextButton(onClick = {
-                    state.selectedDateMillis?.let { millis -> onDesde(millisToDateStr(millis)) }
-                    showDesdePicker = false
-                }) { Text("Aceptar") }
+                TextButton(onClick = { viewModel.grabarDatosExcel() }) { Text("Continuar") }
             },
             dismissButton = {
-                TextButton(onClick = { showDesdePicker = false }) { Text("Cancelar") }
+                TextButton(onClick = { viewModel.cancelarGrabar() }) { Text("Cancelar") }
             }
-        ) {
-            androidx.compose.material3.DatePicker(state = state)
-        }
-    }
-
-    if (showHastaPicker) {
-        val state = androidx.compose.material3.rememberDatePickerState()
-        androidx.compose.material3.DatePickerDialog(
-            onDismissRequest = { showHastaPicker = false },
-            confirmButton = {
-                TextButton(onClick = {
-                    state.selectedDateMillis?.let { millis -> onHasta(millisToDateStr(millis)) }
-                    showHastaPicker = false
-                }) { Text("Aceptar") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showHastaPicker = false }) { Text("Cancelar") }
-            }
-        ) {
-            androidx.compose.material3.DatePicker(state = state)
-        }
-    }
-}
-
-@Composable
-private fun VentaItemCard(v: FirebaseVenta, direccionPorNombre: Map<String, String>) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceVariant
         )
-    ) {
-        Column(modifier = Modifier.padding(12.dp)) {
-            if (v.clienteNombre.isNotBlank()) Text(v.clienteNombre,
-                fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodyMedium)
-            Row {
-                if (v.id.isNotBlank()) Text("${v.id}  ",
-                    fontWeight = FontWeight.Bold, style = MaterialTheme.typography.bodySmall)
-                if (v.fechaSubidoString.isNotBlank()) Text(v.fechaSubidoString,
-                    style = MaterialTheme.typography.bodySmall)
-            }
-            if (v.zonaVenta.isNotBlank()) {
-                val dir = direccionPorNombre[v.clienteNombre.lowercase().trim()] ?: ""
-                Text(if (dir.isNotBlank()) "Zona: ${v.zonaVenta}  Dir: $dir" else "Zona: ${v.zonaVenta}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary)
-            }
-            if (v.observa.isNotBlank()) Text(v.observa,
-                style = MaterialTheme.typography.bodySmall)
-            if (v.productos.isNotEmpty()) {
-                HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
-                com.autotransfer.ui.components.ProductTable(
-                    productos = v.productos,
-                    totalVenta = v.total
-                )
-            }
-        }
     }
-}
 
-private fun parseZonas(input: String): List<String> {
-    return input.split(",", " ", ";")
-        .map { it.trim() }
-        .filter { it.isNotBlank() }
-}
+    val diagnostico by viewModel.diagnosticoEscritura.collectAsState()
+    diagnostico?.let { (texto, _) ->
+        AlertDialog(
+            onDismissRequest = { viewModel.cerrarDiagnosticoEscritura() },
+            title = { Text("Diagnóstico de escritura") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .heightIn(max = 420.dp)
+                ) {
+                    Text(
+                        texto,
+                        fontFamily = FontFamily.Monospace,
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.cerrarDiagnosticoEscritura() }) { Text("Cerrar") }
+            }
+        )
+    }
 
-private fun millisToDateStr(millis: Long): String {
-    val cal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"))
-    cal.timeInMillis = millis
-    val dia = cal.get(java.util.Calendar.DAY_OF_MONTH)
-    val meses = arrayOf("Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic")
-    val mes = meses[cal.get(java.util.Calendar.MONTH)]
-    val anio = cal.get(java.util.Calendar.YEAR)
-    return "${dia.toString().padStart(2, '0')}-$mes-$anio"
 }
 
 @Composable
@@ -1503,7 +1148,7 @@ private fun ConfigScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                         onClick = {
                             viewModel.saveFechaDesde(fbDesde)
                             viewModel.saveFechaHasta(fbHasta)
-                            viewModel.procesarFirebaseDiagnostic(fbDesde, fbHasta, parseZonas(fbZonas))
+                            viewModel.procesarFirebaseDiagnostic(fbDesde, fbHasta, Fechas.zonas(fbZonas))
                             showFbProcessDiag = false
                         },
                         modifier = Modifier.height(40.dp)
@@ -1520,7 +1165,7 @@ private fun ConfigScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     onDismissRequest = { fbShowDesde = false },
                     confirmButton = {
                         TextButton(onClick = {
-                            st.selectedDateMillis?.let { fbDesde = millisToDateStr(it) }
+                            st.selectedDateMillis?.let { fbDesde = Fechas.deMillis(it) }
                             fbShowDesde = false
                         }) { Text("Aceptar") }
                     },
@@ -1535,7 +1180,7 @@ private fun ConfigScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     onDismissRequest = { fbShowHasta = false },
                     confirmButton = {
                         TextButton(onClick = {
-                            st.selectedDateMillis?.let { fbHasta = millisToDateStr(it) }
+                            st.selectedDateMillis?.let { fbHasta = Fechas.deMillis(it) }
                             fbShowHasta = false
                         }) { Text("Aceptar") }
                     },

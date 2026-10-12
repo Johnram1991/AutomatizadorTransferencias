@@ -10,6 +10,17 @@ data class FirebaseCliente(
     val correo: String = "",
     val zona: String = ""
 ) {
+    fun toMap(): Map<String, Any?> = mapOf(
+        "id" to id,
+        "nombre" to nombre,
+        "empresa" to empresa,
+        "direccion" to direccion,
+        "rfc" to rfc,
+        "telefono" to telefono,
+        "correo" to correo,
+        "zona" to zona
+    )
+
     companion object {
         fun fromMap(id: String, map: Map<String, Any?>): FirebaseCliente {
             val zonaRaw = map["zonaClave"] ?: map["zona"]

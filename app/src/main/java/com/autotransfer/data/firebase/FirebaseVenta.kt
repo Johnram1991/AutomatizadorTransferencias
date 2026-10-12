@@ -11,6 +11,18 @@ data class FirebaseVenta(
     val total: Double = 0.0,
     val productos: List<Map<String, Any?>> = emptyList()
 ) {
+    fun toMap(): Map<String, Any?> = mapOf(
+        "id" to id,
+        "clienteNombre" to clienteNombre,
+        "VentaT" to ventaT,
+        "observaciones" to observa,
+        "promociones" to promos,
+        "zona" to zonaVenta,
+        "fecha" to fechaSubidoString,
+        "total" to total,
+        "productos" to productos
+    )
+
     companion object {
         fun fromMap(id: String, map: Map<String, Any?>): FirebaseVenta {
             val zonaRaw = map["zonaClave"] ?: map["zona"]

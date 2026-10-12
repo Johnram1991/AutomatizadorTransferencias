@@ -56,6 +56,12 @@ android {
             excludes += "/META-INF/DEPENDENCIES"
         }
     }
+
+    testOptions {
+        // android.util.Log y otros stubs del SDK devuelven 0 en vez de lanzar,
+        // para que los tests unitarios puedan ejercitar ExcelManager.
+        unitTests.isReturnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -82,6 +88,10 @@ dependencies {
     implementation("com.fasterxml.woodstox:woodstox-core:6.5.1")
 
     implementation("androidx.documentfile:documentfile:1.0.1")
+
+    testImplementation("junit:junit:4.13.2")
+    // org.json del SDK es un stub que lanza en tests unitarios
+    testImplementation("org.json:json:20231013")
 
     implementation(platform("com.google.firebase:firebase-bom:32.7.0"))
     implementation("com.google.firebase:firebase-auth-ktx")

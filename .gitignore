@@ -23,6 +23,7 @@ out/
 *.log
 *.hprof
 *.png
+!app/src/main/res/**/ic_launcher*.png
 *.jpg
 *.jpeg
 *.gif
