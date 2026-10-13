@@ -79,6 +79,25 @@ data class TopProducto(
     val piezas: Int
 )
 
+/**
+ * Transfers del rango que contienen el producto (por nombre, o por tipo si el
+ * nombre viene vacio). Top-level para poder probarlo sin el ViewModel.
+ */
+internal fun filtrarVentasPorProducto(
+    ventas: List<FirebaseVenta>,
+    nombre: String
+): List<FirebaseVenta> {
+    val objetivo = nombre.trim().lowercase()
+    if (objetivo.isEmpty()) return emptyList()
+    return ventas.filter { v ->
+        v.productos.any { p ->
+            val pNombre = p["nombre"]?.toString()?.trim()?.lowercase().orEmpty()
+            val pTipo = p["tipo"]?.toString()?.trim()?.lowercase().orEmpty()
+            pNombre == objetivo || (pNombre.isEmpty() && pTipo == objetivo)
+        }
+    }
+}
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow<UiState>(UiState.Idle)
@@ -138,6 +157,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _resumenClientes = MutableStateFlow<List<ResumenCliente>>(emptyList())
     val resumenClientes: StateFlow<List<ResumenCliente>> = _resumenClientes.asStateFlow()
 
+    // Top por cliente de GRAFICOS: NUNCA lleva el filtro/orden de la pantalla
+    // Resumen, para que no herede un texto escrito en "Filtrar cliente".
+    private val _topVentasPorCliente = MutableStateFlow<List<ResumenCliente>>(emptyList())
+    val topVentasPorCliente: StateFlow<List<ResumenCliente>> = _topVentasPorCliente.asStateFlow()
+
     private val _resumenAsc = MutableStateFlow(false)
     val resumenAsc: StateFlow<Boolean> = _resumenAsc.asStateFlow()
 
@@ -196,6 +220,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _topProductos = MutableStateFlow<List<TopProducto>>(emptyList())
     val topProductos: StateFlow<List<TopProducto>> = _topProductos.asStateFlow()
+
+    private val _productoActivo = MutableStateFlow<String?>(null)
+    val productoActivo: StateFlow<String?> = _productoActivo.asStateFlow()
+
+    private val _ventasProducto = MutableStateFlow<List<FirebaseVenta>>(emptyList())
+    val ventasProducto: StateFlow<List<FirebaseVenta>> = _ventasProducto.asStateFlow()
 
     private val _pendingOperaciones = MutableStateFlow<List<Operacion>>(emptyList())
     val pendingOperaciones: StateFlow<List<Operacion>> = _pendingOperaciones.asStateFlow()
@@ -763,6 +793,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _ventasFiltradas.value = filtradas
             recalcularResumen()
             recalcularTopProductos()
+            recalcularGraficos()
         }
     }
 
@@ -826,6 +857,43 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
             .sortedByDescending { it.total }
+    }
+
+    /**
+     * Top por cliente de la pantalla de Graficos, SIN el filtro ni el orden de la
+     * pantalla Resumen (que comparte [resumenClientes]). Asi Graficos siempre
+     * refleja el mismo dato que Ventas dentro del rango.
+     */
+    internal fun recalcularGraficos() {
+        _topVentasPorCliente.value = _ventasFiltradas.value
+            .groupBy { it.clienteNombre.trim().ifEmpty { "Sin nombre" } }
+            .map { (cliente, lista) -> ResumenCliente(cliente, lista.size, lista.sumOf { it.total }) }
+            .sortedByDescending { it.total }
+    }
+
+    /**
+     * Entrar a Graficos: carga la zona (cache del dia o descarga) y despues
+     * recalcula SIEMPRE los totales. Sin esto, cuando la carga sale antes de tiempo
+     * (datos ya en memoria) los graficos podrian quedarse con el resumen viejo o
+     * con el filtro heredado de la pantalla Resumen.
+     */
+    fun refrescarGraficos(zonas: List<String>) {
+        loadFirebaseData(zonas)
+        setFechas(_fechaDesde.value, _fechaHasta.value)
+    }
+
+    /** Transfers del rango que contienen el producto que toco en Graficos. */
+    fun verVentasDeProducto(nombre: String) {
+        viewModelScope.launch(Dispatchers.Default) {
+            _productoActivo.value = nombre
+            _ventasProducto.value = filtrarVentasPorProducto(_ventasFiltradas.value, nombre)
+                .sortedByDescending { ventaSortKey(it) }
+        }
+    }
+
+    fun cerrarVentasDeProducto() {
+        _ventasProducto.value = emptyList()
+        _productoActivo.value = null
     }
 
     private fun parseFecha(fecha: String): Long {

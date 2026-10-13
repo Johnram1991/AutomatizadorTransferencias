@@ -41,6 +41,11 @@ fun HollandScreen(viewModel: MainViewModel, onBack: () -> Unit) {
     var clienteNombre by rememberSaveable { mutableStateOf("") }
     var zona by rememberSaveable { mutableStateOf(viewModel.getSavedZonaFilter()) }
 
+    // De donde vino ClienteDetalle: al volver regresa a la pantalla de origen
+    // (Clientes / Resumen / Graficos) en vez de siempre a Clientes.
+    var detalleOrigen by rememberSaveable { mutableStateOf(HollandDestino.Clientes) }
+    var productoActivo by rememberSaveable { mutableStateOf("") }
+
     val ultimaSync by viewModel.ultimaSync.collectAsState()
     val isFirebaseLoading by viewModel.isFirebaseLoading.collectAsState()
     val syncMensaje by viewModel.syncMensaje.collectAsState()
@@ -50,7 +55,11 @@ fun HollandScreen(viewModel: MainViewModel, onBack: () -> Unit) {
 
     BackHandler(enabled = isLoggedIn) {
         destino = when (destino) {
-            HollandDestino.ClienteDetalle -> HollandDestino.Clientes
+            HollandDestino.ClienteDetalle -> detalleOrigen
+            HollandDestino.ProductoDetalle -> {
+                viewModel.cerrarVentasDeProducto()
+                HollandDestino.Graficos
+            }
             HollandDestino.Menu -> {
                 onBack()
                 HollandDestino.Menu
@@ -117,6 +126,7 @@ fun HollandScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     zona = zona,
                     onZonaChange = { zona = it },
                     onClienteClick = { cliente ->
+                        detalleOrigen = HollandDestino.Clientes
                         clienteNombre = cliente.nombre
                         destino = HollandDestino.ClienteDetalle
                     }
@@ -125,7 +135,7 @@ fun HollandScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                 HollandDestino.ClienteDetalle -> HollandClienteDetalleScreen(
                     viewModel = viewModel,
                     clienteNombre = clienteNombre,
-                    onBack = { destino = HollandDestino.Clientes }
+                    onBack = { destino = detalleOrigen }
                 )
 
                 HollandDestino.Ventas -> HollandVentasScreen(
@@ -139,6 +149,7 @@ fun HollandScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     zona = zona,
                     onZonaChange = { zona = it },
                     onClienteClick = { cliente ->
+                        detalleOrigen = HollandDestino.Resumen
                         clienteNombre = cliente
                         destino = HollandDestino.ClienteDetalle
                     }
@@ -149,8 +160,22 @@ fun HollandScreen(viewModel: MainViewModel, onBack: () -> Unit) {
                     zona = zona,
                     onZonaChange = { zona = it },
                     onClienteClick = { cliente ->
+                        detalleOrigen = HollandDestino.Graficos
                         clienteNombre = cliente
                         destino = HollandDestino.ClienteDetalle
+                    },
+                    onProductoClick = { producto ->
+                        productoActivo = producto
+                        destino = HollandDestino.ProductoDetalle
+                    }
+                )
+
+                HollandDestino.ProductoDetalle -> HollandProductoDetalleScreen(
+                    viewModel = viewModel,
+                    producto = productoActivo,
+                    onBack = {
+                        viewModel.cerrarVentasDeProducto()
+                        destino = HollandDestino.Graficos
                     }
                 )
             }

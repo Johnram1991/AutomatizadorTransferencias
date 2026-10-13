@@ -253,6 +253,31 @@ historial se conserva como evidencia de los problemas y sus causas.
     200 ms + 4 pasos × 300 ms + 600 ms = 2.000 ms). `rememberSaveable` evita que se repita
     al rotar. "V <versionName>" en la esquina (versionName 1.0 del gradle).
 
+### 17. Oct 2026 — Gráficos de Holland: totales sin filtro heredado y transfers por producto
+- **Bug**: en App Holland > Gráficos, zona 25, aparecía "No hay ventas en este rango" aunque
+  Ventas sí mostraba transfers, y las barras de producto "no hacían nada".
+- **Causa de la sección vacía**: Gráficos armaba el top por cliente leyendo `resumenClientes`,
+  que `recalcularResumen()` calcula aplicando el **filtro/orden global de la pantalla Resumen**
+  (`_resumenClienteFiltro`, `_resumenAsc`): un texto sobrante en "Filtrar cliente" vaciaba el
+  top de Gráficos. Además, al entrar, `loadFirebaseData` podía **salir antes de tiempo**
+  (caché del día + datos ya en memoria) sin recalcular totales.
+- **Cambios en `MainViewModel`**:
+  - `topVentasPorCliente` nuevo: agrega clientes por total **sin** el filtro de Resumen
+    (dedicado a Gráficos); se recalcula en `setFechas` junto a `recalcularResumen` y
+    `recalcularTopProductos`.
+  - `refrescarGraficos(zonas)` = carga + `setFechas(range actual)`: entrar a Gráficos SIEMPRE
+    recalcula.
+  - Producto → transfers: `productoActivo`, `ventasProducto`, `verVentasDeProducto(nombre)`
+    (filtra `_ventasFiltradas` por producto, orden por fecha) y `cerrarVentasDeProducto()`.
+    Helper top-level `filtrarVentasPorProducto` (nombre o tipo, sin mayúsculas) probado en
+    `HollandGraficosTest` (4 tests).
+- **UI**: `HollandGraficosScreen` lee `topVentasPorCliente`, usa `refrescarGraficos` y recibe
+  `onProductoClick`; el subtítulo "Toca una barra…" solo aparece cuando hay barras. Nuevo
+  `HollandProductoDetalleScreen` (lista de transfers del rango que contienen el producto, total,
+  refrescar, "← Volver a Gráficos"). En `HollandScreen`: `detalleOrigen` guarda de qué pantalla
+  vino ClienteDetalle (Clientes/Resumen/Gráficos) y se vuelve a esa al retroceder; nuevo destino
+  `ProductoDetalle`. Total de tests: **33, 0 fallos**.
+
 ### Próximo paso
 - La prueba guiada de OneDrive quedó resuelta (sección 16): para que el celular que genera
   los datos vea las transferencias, marcar el Excel como "Disponible sin conexión" o
@@ -262,11 +287,13 @@ historial se conserva como evidencia de los problemas y sus causas.
 ### APK último build
 - `app/build/outputs/apk/release/app-release.apk` (firmado), copia en
   `/storage/emulated/0/Download/Download/Autotransfer/Auto Transfer V5.apk`
-  (13-oct, release con splash Sith de 2 s, 27.428.843 B, SHA-256
-  `dfc5c0cfe11b062f2c0a422ad49e6e6408f4b56d3d130aa026a2f99b98da403e`).
-- Histórico 12-oct (splash sin adaptar): `Auto Transfer V5.apk`, 27.428.843 B,
+  (13-oct, release con gráficos Holland corregidos, 27.445.227 B, SHA-256
+  `4daf5005c06af7e3dd196a9a44f575a6b3ce91a486532a29f82e7d11d9601d16`).
+- Histórico 12-oct (splash Sith 2 s): 27.428.843 B,
+  SHA-256 `dfc5c0cfe11b062f2c0a422ad49e6e6408f4b56d3d130aa026a2f99b98da403e`.
+- Histórico 12-oct (splash sin adaptar): 27.428.843 B,
   SHA-256 `fe83c16214c4e57763c31af559ed0e1cefd7507c67d246e22a0e95833416892b`.
-- Histórico 12-oct (sin splash): `Auto Transfer V5.apk` previo, 27.170.851 B,
+- Histórico 12-oct (sin splash): 27.170.851 B,
   SHA-256 `cb2775a5fae3d6f1486e8900dab943d3f9e940b74964ef9a28577d397b1bc3c6`.
 - Histórico 06-oct: `AutoTransfer4v.apk` (27.170.851 B,
   SHA-256 `20a9e071f651a17ae58c8f83b745ca6a2ec13cb6f01e640cc1d8333b16816755`).

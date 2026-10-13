@@ -7,5 +7,6 @@ enum class HollandDestino {
     Ventas,
     Resumen,
     Graficos,
-    ClienteDetalle
+    ClienteDetalle,
+    ProductoDetalle
 }

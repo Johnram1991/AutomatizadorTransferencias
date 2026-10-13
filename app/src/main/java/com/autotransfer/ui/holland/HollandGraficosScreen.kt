@@ -39,9 +39,10 @@ fun HollandGraficosScreen(
     viewModel: MainViewModel,
     zona: String,
     onZonaChange: (String) -> Unit,
-    onClienteClick: (String) -> Unit
+    onClienteClick: (String) -> Unit,
+    onProductoClick: (String) -> Unit
 ) {
-    val resumen by viewModel.resumenClientes.collectAsState()
+    val porClienteResumen by viewModel.topVentasPorCliente.collectAsState()
     val topProductos by viewModel.topProductos.collectAsState()
     val desde by viewModel.fechaDesde.collectAsState()
     val hasta by viewModel.fechaHasta.collectAsState()
@@ -50,13 +51,13 @@ fun HollandGraficosScreen(
     val fmt = NumberFormat.getCurrencyInstance(Locale("es", "MX"))
 
     // La clave es la zona: cambiar de zona recarga, y dentro del dia sale del
-    // cache (sin red). La descarga forzada vive en el boton "Actualizar Datos".
+    // cache (sin red). refrescarGraficos ademas recalcula los totales al entrar.
     LaunchedEffect(zona) {
-        viewModel.loadFirebaseData(Fechas.zonas(zona))
+        viewModel.refrescarGraficos(Fechas.zonas(zona))
     }
 
-    val porCliente = remember(resumen) {
-        resumen.take(TOP_N).map { HollandBarra(it.cliente, it.total, fmt.format(it.total)) }
+    val porCliente = remember(porClienteResumen) {
+        porClienteResumen.take(TOP_N).map { HollandBarra(it.cliente, it.total, fmt.format(it.total)) }
     }
     val porProducto = remember(topProductos) {
         topProductos.take(TOP_N).map { p ->
@@ -97,7 +98,7 @@ fun HollandGraficosScreen(
             ) {
                 SeccionGrafico(
                     titulo = "💰 Total por cliente",
-                    subtitulo = "Toca una barra para ver sus transfers",
+                    subtitulo = if (porCliente.isNotEmpty()) "Toca una barra para ver sus transfers" else "",
                     vacio = "No hay ventas en este rango para la zona $zona.",
                     hayDatos = porCliente.isNotEmpty()
                 ) {
@@ -109,13 +110,14 @@ fun HollandGraficosScreen(
 
                 SeccionGrafico(
                     titulo = "📦 Total por producto",
-                    subtitulo = "Suma de los transfers del rango, top $TOP_N",
+                    subtitulo = if (porProducto.isNotEmpty()) "Suma de los transfers del rango, top $TOP_N" else "",
                     vacio = "No hay productos en este rango.",
                     hayDatos = porProducto.isNotEmpty()
                 ) {
                     HollandBarChart(
                         filas = porProducto,
-                        colorBarra = MaterialTheme.colorScheme.tertiary
+                        colorBarra = MaterialTheme.colorScheme.tertiary,
+                        onClick = { onProductoClick(it.etiqueta) }
                     )
                 }
                 Spacer(Modifier.height(8.dp))
@@ -134,12 +136,14 @@ private fun SeccionGrafico(
 ) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(titulo, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
-        Text(
-            subtitulo,
-            style = MaterialTheme.typography.bodySmall,
-            fontSize = 10.sp,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        if (subtitulo.isNotBlank()) {
+            Text(
+                subtitulo,
+                style = MaterialTheme.typography.bodySmall,
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
         Spacer(Modifier.height(8.dp))
         if (hayDatos) {
             contenido()
