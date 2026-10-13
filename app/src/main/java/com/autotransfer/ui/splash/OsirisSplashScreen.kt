@@ -43,18 +43,25 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.autotransfer.R
+import com.autotransfer.ui.theme.SithBlack
+import com.autotransfer.ui.theme.SithCrimson
+import com.autotransfer.ui.theme.SithDarkGray
+import com.autotransfer.ui.theme.SithHighlight
+import com.autotransfer.ui.theme.SithRed
+import com.autotransfer.ui.theme.SithTextMuted
+import com.autotransfer.ui.theme.SithTextPrimary
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlin.math.cos
 import kotlin.math.sin
 
-private val BgVoid = Color(0xFF04040A)
-private val BgRadial = Color(0xFF0A0A14)
-private val Gold = Color(0xFFD4AF37)
-private val GoldLight = Color(0xFFF0D060)
-private val Rojo = Color(0xFFE53935)
-private val TextHeading = Color(0xFFF5F0E0)
-private val TextMuted = Color(0xFF5C5A54)
+private val BgVoid = SithBlack
+private val BgRadial = SithDarkGray
+private val AcentoPrincipal = SithRed
+private val AcentoClaro = SithCrimson
+private val AcentoBrillo = SithHighlight
+private val TextHeading = SithTextPrimary
+private val TextMuted = SithTextMuted
 
 private val HUD_FONT = FontFamily(
     Font(R.font.jetbrains_mono_regular, FontWeight.Normal),
@@ -80,12 +87,12 @@ fun OsirisSplash(title: String = "Auto Transfer", subtitle: String = "By John Ra
     var currentMessage by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
-        delay(250)
+        delay(200)
         BOOT_STEPS.forEach { (msg, _) ->
             currentMessage = msg
-            delay(250)
+            delay(300)
         }
-        delay(250)
+        delay(600)
         onTimeout()
     }
 
@@ -119,7 +126,7 @@ fun OsirisSplash(title: String = "Auto Transfer", subtitle: String = "By John Ra
         Text(
             "V $versionName",
             modifier = Modifier.align(Alignment.TopStart).padding(20.dp),
-            color = Gold,
+            color = AcentoPrincipal,
             fontSize = 11.sp,
             fontFamily = HUD_FONT,
             fontWeight = FontWeight.Bold,
@@ -152,18 +159,18 @@ private fun Compass(modifier: Modifier = Modifier) {
     Canvas(modifier.size(140.dp)) {
         val c = center
 
-        drawCircle(Gold.copy(alpha = 0.22f), radius = 26.dp.toPx(), center = c)
-        drawCircle(Gold.copy(alpha = 0.45f), radius = 22.dp.toPx(), center = c)
-        drawCircle(Gold, radius = 20.dp.toPx(), center = c, style = Stroke(2.dp.toPx()))
+        drawCircle(AcentoPrincipal.copy(alpha = 0.22f), radius = 26.dp.toPx(), center = c)
+        drawCircle(AcentoPrincipal.copy(alpha = 0.45f), radius = 22.dp.toPx(), center = c)
+        drawCircle(AcentoPrincipal, radius = 20.dp.toPx(), center = c, style = Stroke(2.dp.toPx()))
         drawCircle(BgVoid, radius = 16.dp.toPx(), center = c)
 
-        drawCircle(Rojo.copy(alpha = 0.6f), radius = 40.dp.toPx(), center = c, style = Stroke(1.dp.toPx()))
-        drawCircle(Gold.copy(alpha = 0.35f), radius = 55.dp.toPx(), center = c, style = Stroke(1.5.dp.toPx()))
-        drawCircle(Gold.copy(alpha = 0.14f), radius = 70.dp.toPx(), center = c, style = Stroke(1.dp.toPx()))
+        drawCircle(AcentoBrillo.copy(alpha = 0.6f), radius = 40.dp.toPx(), center = c, style = Stroke(1.dp.toPx()))
+        drawCircle(AcentoPrincipal.copy(alpha = 0.35f), radius = 55.dp.toPx(), center = c, style = Stroke(1.5.dp.toPx()))
+        drawCircle(AcentoPrincipal.copy(alpha = 0.14f), radius = 70.dp.toPx(), center = c, style = Stroke(1.dp.toPx()))
 
         val outerR = 70.dp.toPx()
         drawArc(
-            color = Gold,
+            color = AcentoPrincipal,
             startAngle = outer - 45f,
             sweepAngle = 90f,
             useCenter = false,
@@ -172,9 +179,9 @@ private fun Compass(modifier: Modifier = Modifier) {
             style = Stroke(2.dp.toPx())
         )
 
-        drawOrb(Rojo, c, 40.dp.toPx(), inner)
-        drawOrb(Gold, c, 55.dp.toPx(), mid)
-        drawOrb(GoldLight, c, 70.dp.toPx(), outer)
+        drawOrb(AcentoBrillo, c, 40.dp.toPx(), inner)
+        drawOrb(AcentoPrincipal, c, 55.dp.toPx(), mid)
+        drawOrb(AcentoClaro, c, 70.dp.toPx(), outer)
     }
 }
 
@@ -231,7 +238,7 @@ private fun AnimatedSubtitle(subtitle: String) {
     }
     Text(
         text = subtitle.uppercase(),
-        color = Gold.copy(alpha = alpha.value),
+        color = AcentoPrincipal.copy(alpha = alpha.value),
         fontSize = 11.sp,
         fontFamily = HUD_FONT,
         fontWeight = FontWeight.Bold,
@@ -246,14 +253,14 @@ private fun OsirisProgressBar() {
         progress.animateTo(1f, tween(1200, easing = LinearEasing))
     }
     Box(
-        Modifier.width(240.dp).height(2.dp).background(Gold.copy(alpha = 0.1f))
+        Modifier.width(240.dp).height(2.dp).background(AcentoPrincipal.copy(alpha = 0.1f))
     ) {
         Box(
             Modifier
                 .fillMaxWidth(progress.value)
                 .fillMaxHeight()
                 .background(
-                    Brush.horizontalGradient(listOf(Gold, Rojo, Gold))
+                    Brush.horizontalGradient(listOf(AcentoPrincipal, AcentoBrillo, AcentoPrincipal))
                 )
         )
     }
@@ -263,7 +270,7 @@ private fun OsirisProgressBar() {
 private fun BootMessage(message: String, isReady: Boolean) {
     Text(
         text = message,
-        color = if (isReady) Gold else TextMuted,
+        color = if (isReady) AcentoBrillo else TextMuted,
         fontSize = 10.sp,
         fontFamily = HUD_FONT,
         letterSpacing = 2.sp
@@ -282,7 +289,7 @@ private fun HUDOverlay(modifier: Modifier = Modifier) {
 
         drawRect(
             Brush.radialGradient(
-                colors = listOf(Color.Transparent, Color(0x9904040A), Color(0xF204040A)),
+                colors = listOf(Color.Transparent, Color(0x99000000), Color(0xF2000000)),
                 center = center,
                 radius = size.maxDimension * 0.85f
             )
@@ -294,13 +301,13 @@ private fun HUDOverlay(modifier: Modifier = Modifier) {
         val w = size.width
         val h = size.height
 
-        drawLine(Gold, Offset(m, m), Offset(m + len, m), strokeWidth = sw)
-        drawLine(Gold, Offset(m, m), Offset(m, m + len), strokeWidth = sw)
-        drawLine(Gold, Offset(w - m, m), Offset(w - m - len, m), strokeWidth = sw)
-        drawLine(Gold, Offset(w - m, m), Offset(w - m, m + len), strokeWidth = sw)
-        drawLine(Gold, Offset(m, h - m), Offset(m + len, h - m), strokeWidth = sw)
-        drawLine(Gold, Offset(m, h - m), Offset(m, h - m - len), strokeWidth = sw)
-        drawLine(Gold, Offset(w - m, h - m), Offset(w - m - len, h - m), strokeWidth = sw)
-        drawLine(Gold, Offset(w - m, h - m), Offset(w - m, h - m - len), strokeWidth = sw)
+        drawLine(AcentoPrincipal, Offset(m, m), Offset(m + len, m), strokeWidth = sw)
+        drawLine(AcentoPrincipal, Offset(m, m), Offset(m, m + len), strokeWidth = sw)
+        drawLine(AcentoPrincipal, Offset(w - m, m), Offset(w - m - len, m), strokeWidth = sw)
+        drawLine(AcentoPrincipal, Offset(w - m, m), Offset(w - m, m + len), strokeWidth = sw)
+        drawLine(AcentoPrincipal, Offset(m, h - m), Offset(m + len, h - m), strokeWidth = sw)
+        drawLine(AcentoPrincipal, Offset(m, h - m), Offset(m, h - m - len), strokeWidth = sw)
+        drawLine(AcentoPrincipal, Offset(w - m, h - m), Offset(w - m - len, h - m), strokeWidth = sw)
+        drawLine(AcentoPrincipal, Offset(w - m, h - m), Offset(w - m, h - m - len), strokeWidth = sw)
     }
 }

@@ -131,11 +131,12 @@ manual de ciudades con Room.
   `PaqueteXlsx` antes de escribir.
 - App Holland: menú (Clientes/Ventas/Resumen/Gráficos), caché diaria por zona en
   disco, búsqueda difusa local, detalle de cliente y gráficas con Canvas.
-- **Splash OSIRIS** al arrancar: fondo negro radial, compás dorado girando, título
-  "AUTO TRANSFER" letra por letra, subtítulo dorado "BY JOHN RAM", barra de progreso
-  y mensajes de boot (PDF ENGINE / CONFIG / FIREBASE / SYSTEM READY). Fuentes
-  JetBrains Mono (OFL) en `res/font/jetbrains_mono_{regular,bold}.ttf`. Dura ~4 s,
-  sin botones, `onTimeout` automático, `rememberSaveable` para no repetirse al rotar.
+- **Splash OSIRIS** al arrancar: fondo negro radial, compás rojo Sith girando, título
+  "AUTO TRANSFER" letra por letra en blanco, subtítulo "BY JOHN RAM" en rojo, barra de
+  progreso y mensajes de boot (PDF ENGINE / CONFIG / FIREBASE / SYSTEM READY). Colores
+  de la app (paleta Sith de `ui/theme/Color.kt`, sin dorado). Fuentes JetBrains Mono
+  (OFL) en `res/font/jetbrains_mono_{regular,bold}.ttf`. Dura ~**2 s**, sin botones,
+  `onTimeout` automático, `rememberSaveable` para no repetirse al rotar.
 
 ### Problemas conocidos
 1. **OneDrive online-only no refleja la escritura** (evidencia 12-oct, sección 15 del
@@ -243,12 +244,14 @@ historial se conserva como evidencia de los problemas y sus causas.
   - Nuevo `ui/splash/OsirisSplashScreen.kt` en el package `com.autotransfer.ui.splash`,
     íntegro del proyecto de referencia pero con `BOOT_STEPS` personalizados:
     `INITIALIZING PDF ENGINE... / LOADING CONFIG... / CONNECTING FIREBASE... / SYSTEM READY`.
+  - **Colores de la app** (no los de la guía): fondo `SithBlack`/`SithDarkGray`, acentos
+    `SithRed`/`SithCrimson`/`SithHighlight`, texto blanco/gris (`SithText*`). Sin dorado.
   - Fuentes JetBrains Mono en `res/font/jetbrains_mono_{regular,bold}.ttf` (OFL).
   - `MainActivity.AutoTransferApp`: `var splash by rememberSaveable { mutableStateOf(true) }`;
     si `splash` muestra `OsirisSplash(title = "Auto Transfer", subtitle = "By John Ram",
-    onTimeout = { splash = false })` y `return`. Sin botones; se dispara solo (~4 s).
-    `rememberSaveable` evita que se repita al rotar. "V <versionName>" en la esquina
-    (versionName 1.0 del gradle).
+    onTimeout = { splash = false })` y `return`. Sin botones; se dispara solo (~**2 s**:
+    200 ms + 4 pasos × 300 ms + 600 ms = 2.000 ms). `rememberSaveable` evita que se repita
+    al rotar. "V <versionName>" en la esquina (versionName 1.0 del gradle).
 
 ### Próximo paso
 - La prueba guiada de OneDrive quedó resuelta (sección 16): para que el celular que genera
@@ -259,8 +262,10 @@ historial se conserva como evidencia de los problemas y sus causas.
 ### APK último build
 - `app/build/outputs/apk/release/app-release.apk` (firmado), copia en
   `/storage/emulated/0/Download/Download/Autotransfer/Auto Transfer V5.apk`
-  (12-oct, release con splash, 27.428.843 B, SHA-256
-  `fe83c16214c4e57763c31af559ed0e1cefd7507c67d246e22a0e95833416892b`).
+  (13-oct, release con splash Sith de 2 s, 27.428.843 B, SHA-256
+  `dfc5c0cfe11b062f2c0a422ad49e6e6408f4b56d3d130aa026a2f99b98da403e`).
+- Histórico 12-oct (splash sin adaptar): `Auto Transfer V5.apk`, 27.428.843 B,
+  SHA-256 `fe83c16214c4e57763c31af559ed0e1cefd7507c67d246e22a0e95833416892b`.
 - Histórico 12-oct (sin splash): `Auto Transfer V5.apk` previo, 27.170.851 B,
   SHA-256 `cb2775a5fae3d6f1486e8900dab943d3f9e940b74964ef9a28577d397b1bc3c6`.
 - Histórico 06-oct: `AutoTransfer4v.apk` (27.170.851 B,
